@@ -1,0 +1,38 @@
+#!/bin/sh
+# Data-licence guard. Bloomberg data (raw or derived) must never be committed.
+# Enable once per clone:  git config core.hooksPath scripts/hooks
+# Adapted from energy-vol-targeting/scripts/hooks/pre-commit: results tables live
+# flat in results/, notebooks are blocked (their outputs can embed data), and
+# file names with spaces are handled.
+fail=0
+staged=$(git diff --cached --name-only --diff-filter=ACMR)
+IFS='
+'
+for f in $staged; do
+  case "$f" in
+    data/*|*/data/*)
+      echo "BLOCKED: $f is under data/ (licensed data, never commit)"; fail=1 ;;
+    *.xlsx|*.xls|*.xlsm|*.parquet|*.feather|*.h5|*.hdf5|*.pkl|*.pickle|*.npy|*.npz|*.db|*.sqlite|*.ipynb|*.pt|*.pth)
+      echo "BLOCKED: $f has a data-file extension"; fail=1 ;;
+    results/*/*.csv)
+      echo "BLOCKED: $f; results tables live directly in results/"; fail=1 ;;
+    results/*.csv)
+      # Results tables must be aggregated statistics, not time series.
+      rows=$(git show ":$f" | wc -l)
+      if [ "$rows" -gt 200 ]; then
+        echo "BLOCKED: $f has $rows rows; results tables must be summary stats, not daily series"; fail=1
+      fi ;;
+    *.csv)
+      echo "BLOCKED: $f is a CSV outside results/"; fail=1 ;;
+    results/*.json|results/*.txt|results/*.md)
+      rows=$(git show ":$f" | wc -l)
+      if [ "$rows" -gt 300 ]; then
+        echo "BLOCKED: $f has $rows lines; check it is not a data series"; fail=1
+      fi ;;
+  esac
+  size=$(git cat-file -s ":$f" 2>/dev/null || echo 0)
+  if [ "$size" -gt 2000000 ]; then
+    echo "BLOCKED: $f is $size bytes (>2MB); check it is not data"; fail=1
+  fi
+done
+[ $fail -eq 0 ] || { echo "Commit aborted by scripts/hooks/pre-commit"; exit 1; }

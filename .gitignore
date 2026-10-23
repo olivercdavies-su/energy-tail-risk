@@ -1,0 +1,32 @@
+# Bloomberg licence: no data (raw or derived) may ever be committed.
+# scripts/hooks/pre-commit enforces the same rules at commit time.
+/data/
+data/
+*.xlsx
+*.xls
+*.xlsm
+*.csv
+*.parquet
+*.feather
+*.h5
+*.hdf5
+*.pkl
+*.pickle
+*.npy
+*.npz
+*.db
+*.sqlite
+*.ipynb
+*.pt
+*.pth
+
+# Summary results tables are allowed (the hook caps their length)
+!results/*.csv
+
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.egg-info/
+.venv/
+.ipynb_checkpoints/
+.DS_Store

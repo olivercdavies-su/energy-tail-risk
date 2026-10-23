@@ -1,0 +1,8 @@
+#!/bin/sh
+# Authorship guard: commits are Oliver's alone. Reject AI attribution trailers.
+# Enabled with the same `git config core.hooksPath scripts/hooks`.
+if grep -qiE 'co-authored-by|generated with .*claude|claude\.com/claude-code|noreply@anthropic' "$1"; then
+  echo "BLOCKED: commit message contains an attribution line (Co-Authored-By / Claude)."
+  echo "Commit aborted by scripts/hooks/commit-msg"
+  exit 1
+fi
