@@ -1,0 +1,9 @@
+sample,n,nominal,expected_breaches,power_true_1.5x,power_true_2.0x
+"one market, 1-day, 4 years",1000,0.05,50.0,0.8983,1.0
+"one market, 1-day, 4 years",1000,0.01,10.0,0.336,0.7815
+"one market, 1-day, 8 years",2000,0.05,100.0,0.9962,1.0
+"one market, 1-day, 8 years",2000,0.01,20.0,0.5249,0.9583
+"4.5 effective markets, 1-day, 8 years",9000,0.05,450.0,1.0,1.0
+"4.5 effective markets, 1-day, 8 years",9000,0.01,90.0,0.9884,1.0
+"one market, 10-day non-overlapping, 8 years",200,0.05,10.0,0.3326,0.7925
+"one market, 10-day non-overlapping, 8 years",200,0.01,2.0,0.1311,0.2309

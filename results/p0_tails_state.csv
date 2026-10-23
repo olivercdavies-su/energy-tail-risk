@@ -1,0 +1,40 @@
+grouping,state,market,n,breaches,breach_rate,mean_z2,p_vs_1pct
+"vol state (EWMA / 1y avg, terciles)",low vol vs past year,all,3834,86,0.0224,1.0865,0.0
+"vol state (EWMA / 1y avg, terciles)",middle,all,3833,73,0.019,1.0161,0.0
+"vol state (EWMA / 1y avg, terciles)",high vol vs past year,all,3834,67,0.0175,1.009,0.0
+scheduled report / weather day,False,all,9605,165,0.0172,0.9676,0.0
+scheduled report / weather day,True,all,1896,61,0.0322,1.3902,0.0
+weekday,Mon,TTF,258,12,0.0465,1.6468,0.0
+weekday,Tue,TTF,259,1,0.0039,0.8796,0.5291
+weekday,Wed,TTF,260,2,0.0077,0.7687,1.0
+weekday,Thu,TTF,259,3,0.0116,0.8412,0.7476
+weekday,Fri,TTF,254,4,0.0157,1.0755,0.3284
+weekday,Mon,NBP,404,21,0.052,1.5595,0.0
+weekday,Tue,NBP,414,8,0.0193,0.9739,0.0746
+weekday,Wed,NBP,415,3,0.0072,0.7636,0.8042
+weekday,Thu,NBP,415,4,0.0096,0.8169,1.0
+weekday,Fri,NBP,407,7,0.0172,1.0367,0.1338
+weekday,Mon,HH,378,7,0.0185,1.2568,0.1104
+weekday,Tue,HH,413,8,0.0194,1.0005,0.0741
+weekday,Wed,HH,413,4,0.0097,0.7921,1.0
+weekday,Thu,HH,406,10,0.0246,1.321,0.0086
+weekday,Fri,HH,405,2,0.0049,0.7728,0.4514
+weekday,Mon,BRENT,412,5,0.0121,0.9,0.6143
+weekday,Tue,BRENT,414,10,0.0242,0.9872,0.0098
+weekday,Wed,BRENT,415,9,0.0217,1.272,0.0409
+weekday,Thu,BRENT,415,15,0.0361,1.159,0.0
+weekday,Fri,BRENT,407,4,0.0098,0.9021,1.0
+weekday,Mon,WTI,378,2,0.0053,0.8174,0.5987
+weekday,Tue,WTI,413,9,0.0218,1.0423,0.0248
+weekday,Wed,WTI,413,9,0.0218,1.251,0.0248
+weekday,Thu,WTI,406,11,0.0271,1.0362,0.003
+weekday,Fri,WTI,405,9,0.0222,1.0278,0.0223
+weekday,Mon,EUA,412,9,0.0218,1.0485,0.0245
+weekday,Tue,EUA,414,10,0.0242,1.2016,0.0098
+weekday,Wed,EUA,415,10,0.0241,0.9246,0.0099
+weekday,Thu,EUA,415,6,0.0145,1.0353,0.3182
+weekday,Fri,EUA,407,12,0.0295,1.0279,0.001
+held contract,M1,all,9116,176,0.0193,1.049,0.0
+held contract,M2,all,2385,50,0.021,0.9922,0.0
+gas season,Apr-Sep,gas,2697,41,0.0152,0.9681,0.0113
+gas season,Oct-Mar,gas,2663,55,0.0207,1.0922,0.0
