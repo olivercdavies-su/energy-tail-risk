@@ -64,3 +64,19 @@ def test_ohlc_valid():
     c = s(10.5, 11.5, 8.5, 8.5, 10, 10)
     #       ok   close>high close<low high<open missing  flat bar (ok)
     assert ohlc_valid(o, h, l, c).tolist() == [True, False, False, False, False, True]
+
+
+def test_implied_vol_fills_dates_missing_from_the_workbook(monkeypatch):
+    """Option-expiry days have no implied-vol row at all; the fill must still cover them."""
+    from etr import returns
+    from etr.markets import MARKETS
+    days = pd.bdate_range("2020-01-01", periods=10)
+    rows = [{"sheet": "E_OHLC_Vol", "ticker": "CO1 Comdty", "field": f, "date": d, "value": 30.0 + i}
+            for i, d in enumerate(days) if i not in (3, 4) for f in ("HIST_CALL_IMP_VOL", "HIST_PUT_IMP_VOL")]
+    monkeypatch.setattr(returns, "generic_panel", lambda long, m: pd.DataFrame(index=days))
+    iv = returns.implied_vol(pd.DataFrame(rows), MARKETS["BRENT"], max_fill=1)
+    assert iv.index.equals(days)
+    assert iv.iloc[3] == 0.32            # carried from the previous day
+    assert np.isnan(iv.iloc[4])          # beyond max_fill: left missing, never invented
+    assert iv.iloc[5] == 0.35
+    assert returns.implied_vol(pd.DataFrame(rows), MARKETS["TTF"]) is None

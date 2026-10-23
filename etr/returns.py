@@ -266,17 +266,21 @@ def m1_ohlc(long: pd.DataFrame, market: Market) -> pd.DataFrame:
 IV_TICKERS = {"HH": "NG1 Comdty", "BRENT": "CO1 Comdty", "WTI": "CL1 Comdty"}
 
 
-def implied_vol(long: pd.DataFrame, market: str, max_fill: int = 5) -> pd.Series | None:
-    """Front-month option implied vol (mean of call and put, annualised fraction),
-    forward-filled over at most `max_fill` missing days (past information only). Only HH,
-    Brent and WTI have it through 2026; TTF, NBP and EUA stop in 2020-21."""
-    t = IV_TICKERS.get(market)
+def implied_vol(long: pd.DataFrame, market: Market, max_fill: int = 5) -> pd.Series | None:
+    """Front-month option implied vol (mean of call and put, annualised fraction) on the
+    market's trading days, forward-filled over at most `max_fill` missing days (past
+    information only). It is missing about one day a month, around option expiry; those
+    dates have no row at all in the workbook, so the fill must come after reindexing to the
+    trading days. Only HH, Brent and WTI have it through 2026; TTF, NBP and EUA stop in
+    2020-21."""
+    t = IV_TICKERS.get(market.name)
     if t is None:
         return None
     sub = long[(long.sheet == "E_OHLC_Vol") & (long.ticker == t)
                & long.field.isin(["HIST_CALL_IMP_VOL", "HIST_PUT_IMP_VOL"])]
     iv = sub.pivot_table(index="date", columns="field", values="value").mean(axis=1) / 100
-    return iv.ffill(limit=max_fill).rename(market)
+    days = generic_panel(long, market).index
+    return iv.reindex(days).ffill(limit=max_fill).rename(market.name)
 
 
 # ---- Roll verification (never used to build the schedule) ----

@@ -21,7 +21,7 @@ def main(refresh: bool = False) -> None:
     long = load_long(refresh=refresh)
     returns = pd.concat([market_returns(long, m, DEFAULT_ROLL_OFFSET) for m in MARKETS.values()])
     ohlc = pd.concat([m1_ohlc(long, m) for m in MARKETS.values()])
-    iv = pd.concat([s for m in MARKETS if (s := implied_vol(long, m)) is not None], axis=1)
+    iv = pd.concat([s for m in MARKETS.values() if (s := implied_vol(long, m)) is not None], axis=1)
     etr.PROCESSED.mkdir(parents=True, exist_ok=True)
     returns.to_parquet(etr.PROCESSED / "returns.parquet")
     ohlc.to_parquet(etr.PROCESSED / "ohlc_m1.parquet")

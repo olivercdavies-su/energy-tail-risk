@@ -49,7 +49,7 @@ def standardise(df: pd.DataFrame, lam: float = 0.94) -> pd.DataFrame:
         past = z_raw[z_raw.index.year < y].dropna()
         c[df.index.year == y] = (past ** 2).mean() if len(past) > 120 else np.nan
     out = pd.DataFrame({"ret": df["ret"], "span": span, "z_raw": z_raw, "c": c,
-                        "z": z_raw / np.sqrt(c), "s2_prev": s2_prev * c, "tenor": df["tenor"],
+                        "z": z_raw / np.sqrt(c), "s2_prev": s2_prev * c, "s2_raw_prev": s2_prev, "tenor": df["tenor"],
                         "roll": df["roll"]})
     # Vol state: today's EWMA vol relative to its trailing one-year average (known at t-1).
     out["vol_ratio"] = np.sqrt(s2_prev / s2_prev.rolling(252, min_periods=200).mean())
@@ -236,26 +236,36 @@ def iv_table(Z: dict[str, pd.DataFrame], iv: pd.DataFrame) -> pd.DataFrame:
     """Implied vol (front-month options, known at t-1) as the scale instead of EWMA, with the
     same point-in-time calibration. Lower kurtosis of z = a better scale for tails."""
     rows = []
-    for name in ("HH", "BRENT", "WTI"):
-        x = Z[name]
-        s2 = (iv[name].reindex(x.index) ** 2 / ANN).shift(1)
+
+    def z_and_c(x, vol_annual):
+        s2 = (vol_annual ** 2 / ANN).shift(1)
         z_raw = x["ret"] / np.sqrt(s2 * x["span"])
         c = pd.Series(np.nan, index=x.index)
         for y in range(2011, 2019):
             past = z_raw[z_raw.index.year < y].dropna()
             c[x.index.year == y] = (past ** 2).mean()
-        z_iv = (z_raw / np.sqrt(c)).loc[DEV_START:DEV_END]
-        z_ew = x["z"].loc[DEV_START:DEV_END]
-        both = pd.concat([z_iv, z_ew], axis=1, keys=["iv", "ewma"]).dropna()
-        for k in ("iv", "ewma"):
+        return (z_raw / np.sqrt(c)).loc[DEV_START:DEV_END], c.loc[DEV_START:DEV_END].mean()
+
+    for name in ("HH", "BRENT", "WTI"):
+        x = Z[name]
+        raw_iv = iv[name].reindex(x.index)
+        ewma_vol = np.sqrt(x["s2_raw_prev"].shift(-1) * ANN)   # uncalibrated EWMA vol known at close of t
+        ratio = raw_iv / ewma_vol
+        # Plausibility filter (point-in-time): ignore an implied vol below 1/3 or above 3x the
+        # EWMA vol of the same day and carry the last plausible value. Catches bad prints such as
+        # HH on 2013-11-26 (1.2%, against 31% the day before).
+        filt = raw_iv.where((ratio > 1 / 3) & (ratio < 3)).ffill(limit=5)
+        scales = {"iv": z_and_c(x, raw_iv), "iv_filtered": z_and_c(x, filt),
+                  "ewma": (x["z"].loc[DEV_START:DEV_END], x["c"].loc[DEV_START:DEV_END].mean())}
+        both = pd.concat({k: v[0] for k, v in scales.items()}, axis=1).dropna()
+        for k, (_, mean_c) in scales.items():
             z = both[k]
             rows.append({"market": name, "scale": k, "n": len(z), "sd_z": z.std(), "kurt_z": stats.kurtosis(z),
                          "breach99_left": np.mean(-z > stats.norm.ppf(0.99)),
-                         "breach99_right": np.mean(z > stats.norm.ppf(0.99)),
-                         "mean_c": c.loc[DEV_START:DEV_END].mean() if k == "iv" else x["c"].loc[DEV_START:DEV_END].mean(),
-                         "iv_over_ewma_p01": None, "iv_over_ewma_p99": None})
-        ratio = np.sqrt((iv[name].reindex(x.index) ** 2 / ANN) / (x["s2_prev"] / x["c"])).loc[DEV_START:DEV_END].dropna()
-        rows[-2]["iv_over_ewma_p01"], rows[-2]["iv_over_ewma_p99"] = ratio.quantile(0.01), ratio.quantile(0.99)
+                         "breach99_right": np.mean(z > stats.norm.ppf(0.99)), "mean_c": mean_c,
+                         "days_filtered": int(((ratio <= 1 / 3) | (ratio >= 3)).loc[DEV_START:DEV_END].sum()) if k == "iv_filtered" else None,
+                         "iv_over_ewma_p01": ratio.loc[DEV_START:DEV_END].quantile(0.01) if k == "iv" else None,
+                         "iv_over_ewma_p99": ratio.loc[DEV_START:DEV_END].quantile(0.99) if k == "iv" else None})
     return pd.DataFrame(rows)
 
 
