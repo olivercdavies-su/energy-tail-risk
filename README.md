@@ -4,7 +4,7 @@
 
 It builds on [energy-vol-targeting](https://github.com/olivercdavies-su/energy-vol-targeting). That project found that volatility forecasts are good enough for sizing, but that the tails beyond the 95% level are not modelled well. Its data pipeline (contract-consistent returns built from exchange expiry rules) is reused here.
 
-> **Status:** Phase 1 complete. The evaluation toolkit is built and checked by simulation, and the final test is pre-registered in [`PROTOCOL.md`](PROTOCOL.md) before any tail model exists. The 2019–26 test window stays sealed until the frozen engine is run once. See [`PROJECT_LOG.md`](PROJECT_LOG.md).
+> **Status:** Phase 2 complete. The evaluation toolkit is built and checked by simulation, the final test is pre-registered in [`PROTOCOL.md`](PROTOCOL.md), and the volatility (scale) models are built and evaluated on development data. The 2019–26 test window stays sealed until the frozen engine is run once. See [`PROJECT_LOG.md`](PROJECT_LOG.md).
 
 ## How the engine will be judged
 
@@ -19,6 +19,13 @@ Each test's size and power at this project's sample sizes were checked by simula
 ![Daily tails after scaling by the calibrated EWMA forecast](results/p0_tail_curves.png)
 
 After scaling by a volatility forecast, a Gaussian 99% VaR is breached on 0.7–2.2% of days per tail instead of 1%. Which tail is heavy depends on the market: oil's left tail (long positions) and NBP's right tail (short positions). Details and the other findings are in the project log.
+
+## Scale models (2015–2018 validation, development data only)
+
+![FZ0 gain of each scale model over calibrated EWMA](results/p2_scale_fz0.png)
+
+- **1-day:** combinations of GJR-GARCH, HAR, weekday EWMA and implied vol beat calibrated EWMA on the joint VaR–ES score. A volatility model alone does not fix the 99% tail: with normal tails, long positions still breach 1.4–1.7% of the time. That is the job of the tail-shape models (Phase 3).
+- **10-day:** each model's own term structure beats the square-root-of-time rule.
 
 ## Data and licensing
 

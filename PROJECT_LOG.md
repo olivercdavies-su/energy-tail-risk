@@ -4,6 +4,93 @@ What was decided, why, and what comes next, so any session can pick up from here
 
 ---
 
+## Session 3 (2026-10-24): Phase 2, scale models at 1 and 10 days. Done.
+
+### Done
+- **`etr/scale.py`: the seven scale models the protocol lists.**
+  - The models: calibrated EWMA (= baseline B3), weekday EWMA, GJR-GARCH-t, HAR, implied vol, and two equal-weight combinations (`comb` = weekday EWMA + GJR + HAR; `comb_iv` adds implied vol).
+  - Each gives a 1-day forecast, a √10 version, and its own 10-day term structure.
+  - Walk-forward with annual refits on data up to the previous year-end (expanding from 2010).
+  - Point-in-time calibration of every model, horizon and year, from the model's current parameters run over its training window.
+  - Ported from energy-vol-targeting: EWMA, GJR fitting and multi-step forecasts, HAR components and purging, calibration from current parameters.
+- **`etr/tails.scale_shape_forecast` now takes the h-day variance directly**, so a term structure can replace √h. The Phase 1 baseline outputs are byte-identical after the change.
+- **87 tests** (12 new). They cover:
+  - GJR recovering a *negative* asymmetry, and its multi-step forecasts matching the recursion;
+  - the QLIKE fit recovering known coefficients and being exactly calibrated in-sample;
+  - weekday factors finding a planted Monday effect and shrinking noise;
+  - the implied-vol filter and fallback;
+  - combination arithmetic;
+  - the EWMA candidate equalling B3 exactly;
+  - walk-forward look-ahead, and that a year's fits ignore that year's returns.
+- **The mutation check now injects 14 bugs; all are caught.** The six new ones: no HAR purge, GJR fitted on the forecast year, calibration or weekday factors seeing the forecast year, the origin's weekday used instead of the target's, and no implied-vol fallback.
+- **`scripts/p2_scale.py`** evaluates every model on 2012–18 (data after 2018 dropped first) with a normal shape. Forecasts are cached in `data/processed/` for Phase 3.
+
+### Decisions and why
+1. **HAR is fitted by minimising QLIKE, not by least squares on log variance.**
+   - With daily squared returns as the target, log(r²) is undefined on zero-return days and extremely noisy, and least squares on r² is dominated by a few huge days.
+   - QLIKE for a log-linear variance is convex, so Newton's method finds the optimum exactly, and the fit is calibrated in-sample by construction.
+   - A separate fit on 10-day squared returns gives a direct 10-day HAR.
+   - The fitted weight on yesterday's squared return is about zero in every market. One day's r² is noise; the 5-, 22- and 66-day averages carry the information.
+2. **Weekday factors use the last five years, shrunk toward 1 by empirical Bayes across all markets.** The prior spread of true effects is estimated from the data, so nothing is tuned.
+   - A unit test showed how noisy they are: five years of fat-tailed data give each factor a standard error of 0.1–0.2. A planted 1.6× Monday effect was not detectable over two forecast years; 2× over six was.
+3. **Implied vol and its EWMA fallback are calibrated separately.** Implied vol needs shrinking (a variance risk premium: c = 0.69–0.97) while EWMA needs scaling up (1.04–1.22). One constant for a mix of the two would be wrong for both.
+4. **No candidate was dropped on validation results.** All of them go to Phase 3, where the protocol's rule chooses among full scale × shape configurations.
+
+### Results (validation 2015–18; 2012–14 in brackets where it differs)
+**1-day, normal shape:** pooled FZ0 gain over calibrated EWMA at α = 2.5%, with t-statistics. The minimum detectable effect is about 0.010.
+
+| | comb_iv | comb | GJR | implied vol | HAR | weekday EWMA |
+|---|---|---|---|---|---|---|
+| FZ0 gain | **0.024 (t 4.8)** | 0.019 (4.2) | 0.016 (2.1) | 0.017 (1.5) | 0.014 (1.6) | −0.005 (−0.8) |
+| QLIKE ranking | same order: comb_iv best (t 6.4) | | | | | none |
+| 2012–14 | | | worse (t −1.3) | | worse | **better (t 3.2)** |
+
+- **The combinations are best and the most stable across both windows.**
+- **Calibrated EWMA (B3) and weekday EWMA are outside the 10% model confidence set; every other model is inside.**
+- **GJR and HAR lose to EWMA in 2012–14.** Their early refits had only 2–4 years of data, as the previous project found. From 2015 they have 5+ years, and the test window will have 9+.
+- **No scale model fixes 1-day calibration with a normal shape.**
+  - Long-side 99% breaches run at 1.4–1.7% for every model, and long-side ES is 30–45% too deep.
+  - The better-scoring scales fail slightly *more* often.
+  - So the extreme tail is a **shape problem**, which is exactly Phase 3's job. The scale's job is accuracy.
+- **Weekday factors fix European gas but hurt oil.**
+  - European-gas Monday realised/forecast variance goes from 1.32 to 1.00 in 2015–18 (2.20 to 1.74 in 2012–14).
+  - But oil inherits stale factors: a Thursday effect from 2011–14 that has since vanished (oil Thursday ratio 0.71).
+  - Net validation gain: none. In 2012–14, when the effects were fresh, a clear gain.
+  - DQ weekday failures fall from 5 of 12 market-sides to 3–4.
+
+**10-day:**
+- **Every model's own term structure beats its √10 version.**
+  - FZ0 gains: implied-vol term 0.063, comb_iv term 0.056, HAR term 0.046, comb term 0.045, GJR term 0.042, flat EWMA with 10-day calibration 0.016.
+  - The 10-day minimum detectable effect is about 0.026.
+- **Calibration:** with a normal shape, the EWMA, weekday-EWMA, GJR and comb_iv term structures pass all six pooled non-overlapping tests; √10 calibrated EWMA fails two.
+- **The 10-day calibration scales say why.** Realised 10-day variance is 1.2–1.8× ten times the EWMA variance in TTF, NBP and EUA (positive autocorrelation, as session 1 found), and about 1.0 in HH.
+- **The vol-state bias survives:** even term structures are too low in calm and middle states (realised/forecast sd 1.04–1.17) and slightly high in turbulent ones (0.88–1.03). The direct 10-day HAR is best in calm states (1.04). This is Phase 4's problem.
+
+**Parameters** (`results/p2_scale_params.csv`):
+- GJR asymmetry is negative for TTF, NBP and HH (−0.024 to −0.036) and positive for Brent, WTI and EUA (+0.05 to +0.07). Persistence is about 1.000 in TTF, NBP and EUA.
+- HH's conditional tails are thin (Student-t ν ≈ 20); the others' ν is 5–8.
+- The implied-vol filter replaced 3 prints in 2012–18 (all HH); no fallback was needed.
+
+### Things I'm unsure about
+1. **The weekday model's window may be the wrong design.** Effects drift, so a five-year window carries stale ones (oil Thursday).
+   - A design that only uses the structural weekend effect (European gas Mondays, weather updates) might work better.
+   - Choosing it now would be tuned on the validation window, so I have not changed anything. It is a possible amendment, for you to decide; the protocol allows amendments decided on development data.
+2. **The 1-day gains are real but small,** about 1–2× the minimum detectable effect, so the test window may not confirm them.
+3. **Combinations use equal weights by design.** Fitted weights would have to be estimated on the same few years.
+4. **For TTF, NBP and EUA, `comb_iv` is just `comb`:** there are no options data for them in 2012–18, so implied vol falls back to EWMA.
+
+### Next: Phase 3 (tail shapes and the 1-day engine)
+1. **Shapes on the standardised residuals of each scale** (in-sample, from current parameters, point-in-time):
+   - Student-t;
+   - Hansen skewed-t;
+   - filtered historical simulation;
+   - peaks-over-threshold GPD tails.
+   Each is pooled across markets with market-specific asymmetry, and also per market.
+2. **Tests:** synthetic skewed fat-tailed data with known quantiles and ES; GPD recovering ξ; look-ahead.
+3. **Run the protocol's selection rule (§4.2) on 2015–18** over all scale × shape configurations, and report the shortlist, the calibration screen and the chosen 1-day configuration.
+
+---
+
 ## Session 2 (2026-10-24): Phase 1, the yardstick and the pre-registration. Done.
 
 Oliver approved the session 1 plan as proposed, including its defaults:
