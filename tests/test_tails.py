@@ -73,7 +73,7 @@ def test_normal_forecast_matches_closed_form_and_its_pit_is_uniform():
 def test_sampler_draws_from_the_forecast():
     df = synthetic_market()
     v = scale.ewma_variance(df)
-    fc = tails.scale_shape_forecast(df, v, "short", h=10)
+    fc = tails.scale_shape_forecast(df, 10 * v, "short", h=10)
     draws = fc.sample(np.random.default_rng(2), 4000)
     assert draws.shape == (4000, len(fc.frame))
     assert np.mean(draws > fc.frame["var95"].to_numpy()) == pytest.approx(0.05, abs=0.003)
@@ -118,7 +118,7 @@ def test_no_lookahead(model, h):
         if model == "hs":
             return tails.historical_forecast(d, "long", h).frame
         v = scale.ewma_variance(d) if model == "riskmetrics" else scale.calibrated_ewma_variance(d)
-        return tails.scale_shape_forecast(d, v, "long", h).frame
+        return tails.scale_shape_forecast(d, h * v, "long", h).frame
 
     base, pert = run(df), run(shocked)
     common = base.index[base.index <= cut - pd.offsets.BDay(h + 1)]

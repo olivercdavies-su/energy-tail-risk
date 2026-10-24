@@ -23,6 +23,18 @@ MUTATIONS = [
      "    R = U\n", "bootstrap does not impose the null"),
     ("etr/backtest.py", "    return {\"n\": n, \"hits\": x, \"rate\": x / n, \"lr_uc\": lr, \"p\": float(min(p, 1.0)),",
      "    return {\"n\": n, \"hits\": x, \"rate\": x / n, \"lr_uc\": lr, \"p\": float(stats.chi2.sf(lr, 2)),", "Kupiec with wrong distribution"),
+    ("etr/scale.py", "        trn = trn[(trn[ecol] <= cut)].replace([np.inf, -np.inf], np.nan).dropna()",
+     "        trn = trn.replace([np.inf, -np.inf], np.nan).dropna()", "HAR training targets not purged"),
+    ("etr/scale.py", "    params = gjr_fit(r.loc[:cut])", "    params = gjr_fit(r.loc[:f\"{y}-12-31\"])", "GJR fitted on the forecast year"),
+    ("etr/scale.py", "    ratio = ratio[(end <= cut) & ins.notna()].dropna()",
+     "    ratio = ratio[(end <= cut + pd.DateOffset(years=1)) & ins.notna()].dropna()", "calibration sees the forecast year"),
+    ("etr/scale.py", "    f1 = pd.Series(fmap[wd1[:, 0]], index=df.index)",
+     "    f1 = pd.Series(fmap[df.index.weekday.to_numpy()], index=df.index)", "weekday factor of the origin, not the target"),
+    ("etr/scale.py", "    z2 = (daily_variance(df) / ewma_variance(df).shift(1)).loc[cut - pd.DateOffset(years=years):cut].dropna()",
+     "    z2 = (daily_variance(df) / ewma_variance(df).shift(1)).loc[cut - pd.DateOffset(years=years):cut + pd.DateOffset(months=6)].dropna()",
+     "weekday factors see the forecast year"),
+    ("etr/scale.py", "                cal[(\"iv\", h)] = tuple(a.fillna(b) for a, b in zip(cal[(\"iv\", h)], cal[(\"ewma\", h)]))",
+     "                cal[(\"iv\", h)] = cal[(\"iv\", h)]", "implied vol without its EWMA fallback"),
 ]
 failed_to_catch = []
 for path, old, new, label in MUTATIONS:
@@ -31,7 +43,7 @@ for path, old, new, label in MUTATIONS:
     assert src.count(old) == 1, (label, "pattern not found")
     f.write_text(src.replace(old, new))
     try:
-        r = subprocess.run([sys.executable, "-m", "pytest", "-q", "-x", "tests/test_tails.py", "tests/test_backtest.py"],
+        r = subprocess.run([sys.executable, "-m", "pytest", "-q", "-x", "tests/test_tails.py", "tests/test_backtest.py", "tests/test_scale.py"],
                            capture_output=True, text=True, cwd=ROOT)
     finally:
         f.write_text(src)

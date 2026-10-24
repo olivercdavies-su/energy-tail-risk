@@ -35,7 +35,7 @@ def forecast(df: pd.DataFrame, model: str, side: str, h: int) -> tails.Forecast:
     if model == "hs500":
         return tails.historical_forecast(df, side, h)
     v = scale.ewma_variance(df) if model == "riskmetrics" else scale.calibrated_ewma_variance(df)
-    return tails.scale_shape_forecast(df, v, side, h)
+    return tails.scale_shape_forecast(df, h * v, side, h)       # square-root-of-time
 
 
 def build(rets: pd.DataFrame) -> dict:

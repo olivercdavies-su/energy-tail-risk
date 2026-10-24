@@ -94,16 +94,17 @@ def tail_mean(g: Callable[[np.ndarray], np.ndarray], shape, alpha: float, upper:
     return np.sum(g(q) * 2 * _NODES * _WEIGHTS, axis=-1)
 
 
-def scale_shape_forecast(df: pd.DataFrame, daily_var: pd.Series, side: str, h: int = 1,
+def scale_shape_forecast(df: pd.DataFrame, var_h: pd.Series, side: str, h: int = 1,
                          shape=stats.norm(), alphas=ALPHAS) -> Forecast:
-    """Forecast R over the next h days as sigma_t * Z, with sigma_t^2 = h x the daily
-    variance forecast made at t (the square-root-of-time rule; Phase 4 replaces it) and Z
-    drawn from `shape`, a distribution with unit variance (`ppf`, `cdf`, `rvs`). Zero mean:
-    at these horizons the drift is noise next to the volatility, and assuming none is the
+    """Forecast R over the next h days as sigma_t * Z, with sigma_t^2 = `var_h`, the
+    forecast made at t of the variance of the h-day log return (h x a daily variance under
+    the square-root-of-time rule; a term structure otherwise, see etr.scale), and Z drawn
+    from `shape`, a distribution with unit variance (`ppf`, `cdf`, `rvs`). Zero mean: at
+    these horizons the drift is noise next to the volatility, and assuming none is the
     convention. VaR, ES and the PIT come from the exact loss mapping (no log-return
     approximation)."""
     fwd = forward_returns(df, h)
-    sigma = np.sqrt(h * daily_var)
+    sigma = np.sqrt(var_h)
     ok = fwd.notna() & sigma.notna() & (sigma > 0)
     R, s = fwd[ok].to_numpy(), sigma[ok].to_numpy()
     out = {"loss": to_loss(R, side)}
