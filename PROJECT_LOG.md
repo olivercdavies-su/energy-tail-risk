@@ -4,6 +4,99 @@ What was decided, why, and what comes next, so any session can pick up from here
 
 ---
 
+## Session 4 (2026-10-24): Phase 3, tail shapes and the 1-day engine. Done.
+
+Oliver kept the weekday model as registered (no amendment).
+
+### Done
+- **Shapes for standardised residuals z = r / σ̂ in `etr/tails.py`.**
+  - All share a scipy-like interface, so `scale_shape_forecast` takes any of them.
+  - **Student-t:** symmetric fat tails, one parameter.
+  - **Hansen skewed-t (arch's `SkewStudent`):** fat tails plus asymmetry, mean 0 and variance 1 by construction; λ < 0 means falls are fatter.
+  - **Filtered historical simulation:** the residuals themselves, with the same quantile convention as historical simulation, an exact Acerbi–Tasche ES, and breach ⇔ u ≤ α.
+  - **Peaks-over-threshold:** empirical body, generalised Pareto beyond each side's 10% quantile (McNeil & Frey).
+  - **Each comes per market and pooled.** Pooled versions share tail thickness across markets (one ν; one η with market-specific λ; one ξ across the 12 market-sides with market-side thresholds and scales). Pooled filtered HS pools fully, so its asymmetry is common to all markets.
+- **`etr/engine.py`:**
+  - Each year's shape is fitted to that year's in-sample residuals: the scale model's forecasts from its *current* parameters over its training origins. Calibration makes their mean square exactly 1 (tested).
+  - Year-Y forecasts combine that shape with the year-Y scale forecasts.
+  - It also holds the selection rule (PROTOCOL 4.2) and the complexity order (4.1).
+- **`etr/scale.walk_forward(keep_insample=True)`** returns those in-sample forecasts.
+- **103 tests.** They cover:
+  - every fitted shape recovering the 1% quantile and ES of a known asymmetric distribution (skewed-t with λ = −0.3) on both tails within 5%;
+  - the symmetric t provably missing that asymmetry;
+  - skewed-t and pooled-GPD parameter recovery;
+  - quantile and probability functions inverting each other;
+  - the GPD joining the empirical body at its thresholds;
+  - exact filtered-HS ES;
+  - forecast concatenation;
+  - engine look-ahead, including a first-week-of-year shock;
+  - the selection rule's logic.
+- **The mutation check now injects 20 bugs.**
+  - Phase 3 adds six: residuals past the cut-off, the skewed-t's upper tail read from the wrong end, the GPD's tails swapped, filtered-HS ES without its fractional weight, shapes fitted on the forecast year, and pooled skewed-t forcing one asymmetry.
+  - The first run missed "shapes fitted on the forecast year". Because in-sample forecasts stop at the training cut-off, that bug leaks only one return (the first trading day of the year). A first-week shock test now catches it.
+- **`scripts/p3_tails.py`** builds all 63 configurations (7 scales × 9 shapes) plus the baselines on 2012–18, and applies the selection rule on 2015–18. Data after 2018 is dropped first.
+
+### Decisions and why
+1. **Shapes are fitted to in-sample residuals from the current parameters.**
+   - This is the standard filtered-HS construction, and the same one as the calibration, so the shape describes exactly the forecasts it will be combined with.
+   - The cost: a fitted model's in-sample residuals can be a little thinner-tailed than its true forecast errors. The calibration screen in the selection rule checks this out of sample.
+2. **The GPD threshold is each side's 10% quantile, and ξ is restricted to (−0.5, 1).**
+   - That's the McNeil–Frey choice, fixed before any results.
+   - On t(5) data the fitted ξ is about 0.11 rather than the asymptotic 0.2: at a 10% threshold the t tail isn't yet in its limiting form. The 1% quantile and ES still come out within 1%, and those are what matter.
+3. **This selection is provisional.** The learned models and the stress overlay (Phase 6) join the candidate set later. The rule is applied once more over all candidates at the freeze.
+
+### A design fix made after seeing 2012–14 results (development data)
+The first full run produced one absurd score: per-market GPD with the weekday-EWMA scale lost 1.61 FZ0 in 2012–14, about 50 times anything else. Two design flaws, both caused by small samples:
+1. **Negative tail indices.**
+   - Per-market GPD fits on two to four years of data estimated ξ < 0 in 14 market-years. A negative ξ puts a *maximum* on possible losses, so the next big move is called impossible.
+   - Example: WTI's −10% on 26 Nov 2014, OPEC's Thanksgiving decision, got a PIT of 1.6 × 10⁻⁵.
+   - **Fix:** ξ is restricted to [0, 0.5). ξ ≥ 0 means no finite maximum loss; ξ < 0.5 means finite variance, which unit-variance residuals require.
+2. **Short-side ES exploding.**
+   - A short's loss e^R − 1 has *infinite* expectation under any power-law tail in R, so ES was set by numerically extreme quantiles: EUA short on 17 Apr 2013 got ES = 2.6 × 10⁴⁵.
+   - **Fix:** standardised moves are capped at ±50σ in ES integration and in simulated draws. The largest move in the data is 13σ, so realistic tails are unaffected.
+
+**Effect:** validation-window results are unchanged to four decimals, and so is the selection. The 2012–14 outlier is gone (−1.61 → +0.033). One unit test and two mutations cover the fixes; the mutation check now injects 22 bugs.
+
+### Results: the selection rule on 2015–18 (provisional)
+| | Configurations |
+|---|---|
+| Built | 63 (7 scales × 9 shapes) + historical simulation + RiskMetrics; calibrated EWMA-normal (B3) is `ewma_1\|normal` |
+| In the 10% model confidence set | 45: every non-EWMA scale with every shape. **All EWMA-based configurations are out, whatever the shape**, as are both other baselines. |
+| Also pass all six pooled calibration tests | 40: every shortlisted fat-tailed configuration. The five shortlisted normal-shape ones fail 2–5 tests each. |
+| **Chosen (simplest survivor)** | **`gjr_1\|t_pool`: GJR-GARCH-t scale, pooled Student-t shape.** Complexity 4; FZ0 gain over B3 0.0245 (t = 2.8). |
+
+- **The choice was nearly a coin flip at its complexity.** Four survivors share complexity 4: GJR or HAR, with a pooled or per-market t. GJR with the pooled t has the lowest mean FZ0, by 0.00002 over the per-market t and by 0.002 over HAR.
+- **The best point estimate is the implied-vol combination with pooled GPD tails** (gain 0.0325, t = 4.1). The gap to the chosen configuration (0.008) is below the 0.010 the validation window can detect, so the rule declines to pay for complexity it can't justify.
+
+What the full table says (`results/p3_configs.csv`, `results/p3_configs.png`):
+1. **Fat tails matter, and they fix calibration.**
+   - Replacing the normal with any fat-tailed shape adds 0.005–0.011 FZ0 for every scale.
+   - Normal-shape configurations fail 2–5 of the six pooled calibration tests; fat-tailed ones with a non-EWMA scale fail none.
+2. **Which fat-tailed shape hardly matters.** Within a scale, the eight fat-tailed shapes differ by at most 0.0025 FZ0 (0.0014 for the implied-vol combination). As the Phase 1 power analysis predicted, four years can't tell a t from a skewed-t from a GPD at the 97.5% level.
+3. **The scale matters more than the shape.**
+   - EWMA scales stay outside the confidence set whatever the shape (gain ≤ 0.007).
+   - The implied-vol combination leads for every shape, in both windows (0.031–0.0325 in 2015–18; 0.031–0.037 in 2012–14).
+4. **The chosen configuration's supporting tests** (12 market-sides, 2015–18; `results/p3_supporting.csv`):
+   - **No Holm-adjusted rejection** in Kupiec (99%, 97.5%), Christoffersen, DQ with weekdays (99%, 97.5%), Acerbi–Székely, Du–Escanciano or McNeil–Frey. No 250-day window in the Basel red zone.
+   - For comparison, calibrated EWMA-normal has 8 Holm rejections (4 McNeil–Frey, i.e. thin tails; 3 DQ; 1 Du–Escanciano) and historical simulation 29.
+   - **Weak spots (unadjusted):** oil long positions run hot at 97.5% (Brent 3.7%, WTI 3.5%; Acerbi–Székely p = 0.016 and 0.039). NBP short fails DQ (p = 0.005), the weekday effect again. A symmetric t can't give oil a heavier left tail; the pooled skewed-t can, and it is shortlisted and passes, but it ranks one step more complex.
+5. **GJR was worse than B3 in 2012–14** (gain −0.022, t = −1.1), from refits with only 2–4 years of data. That can't happen in the test window, where refits have 9+ years.
+
+### Things I'm unsure about
+1. **Parsimony vs point estimate.** The registered rule picks GJR + t over the implied-vol combination + GPD, whose point estimate is 0.008 better and more stable across both windows. Preferring the latter now would be a departure from the protocol.
+   - The final selection happens once more at the freeze, after the learned models join, under the same rule.
+   - The test window will show both descriptively (the confidence set over all candidates, PROTOCOL Q2).
+2. **Shapes are fitted on in-sample residuals.** Out-of-sample calibration on 2015–18 passes, so this looks harmless here.
+3. **Short-side ES is a modelling convention past ±50σ.** In theory it is infinite under power-law tails. That's worth a sentence in the write-up, because any risk engine that maps log returns to P&L faces it.
+4. **The oil long side is the weakest calibration point.** If the test window shows oil long breaches, the skewed-t alternative is the one to look at descriptively.
+
+### Next: Phase 4 (10-day)
+1. Shapes for 10-day standardised residuals (from each model's own 10-day forecast), against √10 × the 1-day engine and multi-step simulation.
+2. The 10-day selection rule on 2015–18 (non-overlapping calibration tests, overlapping FZ0).
+3. Revisit the vol-state bias found in Phase 2: 10-day forecasts too low in calm states.
+
+---
+
 ## Session 3 (2026-10-24): Phase 2, scale models at 1 and 10 days. Done.
 
 ### Done

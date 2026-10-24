@@ -4,7 +4,7 @@
 
 It builds on [energy-vol-targeting](https://github.com/olivercdavies-su/energy-vol-targeting). That project found that volatility forecasts are good enough for sizing, but that the tails beyond the 95% level are not modelled well. Its data pipeline (contract-consistent returns built from exchange expiry rules) is reused here.
 
-> **Status:** Phase 2 complete. The evaluation toolkit is built and checked by simulation, the final test is pre-registered in [`PROTOCOL.md`](PROTOCOL.md), and the volatility (scale) models are built and evaluated on development data. The 2019–26 test window stays sealed until the frozen engine is run once. See [`PROJECT_LOG.md`](PROJECT_LOG.md).
+> **Status:** Phase 3 complete. The evaluation toolkit is built and checked by simulation, the final test is pre-registered in [`PROTOCOL.md`](PROTOCOL.md), and the volatility models, tail shapes and 1-day engine are built and evaluated on development data. The 2019–26 test window stays sealed until the frozen engine is run once. See [`PROJECT_LOG.md`](PROJECT_LOG.md).
 
 ## How the engine will be judged
 
@@ -26,6 +26,15 @@ After scaling by a volatility forecast, a Gaussian 99% VaR is breached on 0.7–
 
 - **1-day:** combinations of GJR-GARCH, HAR, weekday EWMA and implied vol beat calibrated EWMA on the joint VaR–ES score. A volatility model alone does not fix the 99% tail: with normal tails, long positions still breach 1.4–1.7% of the time. That is the job of the tail-shape models (Phase 3).
 - **10-day:** each model's own term structure beats the square-root-of-time rule.
+
+## Tail shapes and the 1-day engine (2015–2018 validation)
+
+![FZ0 gain by scale and shape](results/p3_configs.png)
+
+- Every volatility model was combined with every tail shape (normal, Student-t, skewed-t, filtered historical simulation, extreme-value GPD tails; each pooled across markets or per market). That makes 63 configurations.
+- **Fat tails fix calibration:** with any fat-tailed shape and a non-EWMA volatility model, all six pooled calibration tests pass. With normal tails, 2–5 fail.
+- **Which fat-tailed shape is used matters far less than which volatility model.**
+- The pre-registered rule picks the simplest configuration that is statistically tied with the best and passes calibration: **GJR-GARCH with a pooled Student-t**. Across the 12 market-sides it has no Holm-adjusted rejection in any backtest. The choice is provisional until the learned models join the candidate set.
 
 ## Data and licensing
 
@@ -54,6 +63,8 @@ python scripts/p0_reverify.py       # re-verification tables
 python scripts/p0_tails.py          # tail exploration tables and chart
 python scripts/p1_test_size.py      # size and power of every test, by simulation (~15 min)
 python scripts/p1_baselines.py      # baselines on 2012-18 development data
+python scripts/p2_scale.py          # volatility models, 2012-18
+python scripts/p3_tails.py          # tail shapes, all configurations, the selection rule
 pytest                              # real-data tests skip without the workbook
 python scripts/mutation_check.py    # injects known bugs; each must make a test fail
 ```
