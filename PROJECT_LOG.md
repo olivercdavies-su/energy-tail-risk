@@ -1,12 +1,103 @@
 # Project log
 
-What was decided, why, and what comes next, so any session can pick up from here. Newest session at the top. The proposed phased plan is at the bottom.
+What was decided, why, and what comes next, so any session can pick up from here. Newest session at the top. The phased plan (approved 2026-10-24) is at the bottom.
+
+---
+
+## Session 2 (2026-10-24): Phase 1, the yardstick and the pre-registration. Done.
+
+Oliver approved the session 1 plan as proposed, including its defaults:
+- the semi-blind 2019→ test window;
+- long and short positions evaluated separately;
+- 1.5× as the main early-warning event;
+- the proposed portfolios;
+- VaR 95/97.5/99% with ES 97.5%.
+
+### Done
+- **`etr/backtest.py`, the evaluation toolkit:**
+  - exact Kupiec;
+  - Christoffersen and Engle–Manganelli DQ with Monte Carlo p-values (DQ takes extra regressors, e.g. weekday dummies);
+  - Basel traffic light;
+  - ES tests: Acerbi–Székely Z2 (simulated under the model), Du–Escanciano, McNeil–Frey;
+  - the FZ0 joint VaR–ES score and tick loss;
+  - Diebold–Mariano, the model confidence set, Holm;
+  - pooled coverage and ES tests;
+  - a non-overlapping window selector on a calendar grid shared by all markets.
+- **`etr/tails.py`:**
+  - unit long/short losses from contract-consistent returns, using the exact simple-return mapping (no log approximation);
+  - a `Forecast` object carrying VaR, ES, the PIT and a sampler, so every test sees the same distribution;
+  - scale × shape forecasts, with ES by Gauss–Legendre quadrature on the quantile function (accurate to 1e-10 against the closed form);
+  - historical simulation.
+- **`etr/scale.py`:** EWMA and its point-in-time calibration.
+- **Three baselines, fixed before any model exists:** `hs500`, `riskmetrics`, `ewma_cal`.
+- **75 tests**, all on synthetic data with known answers or as look-ahead perturbations. `scripts/mutation_check.py` injects eight realistic bugs (EWMA peeking a day ahead, calibration using its own year, an off-by-one forward return, a shifted HS window, a PIT on the wrong tail, FZ0 without 1/α, a bootstrap that doesn't impose the null, Kupiec with the wrong distribution); **each is caught**. The first run caught only six. The PIT-direction and Kupiec tests were too weak and have been strengthened.
+- **`scripts/p1_test_size.py`:** size and power of every registered test by simulation (`results/p1_test_size.csv`).
+- **`scripts/p1_baselines.py`:** the baselines on 2012–18 through the whole toolkit (`results/p1_baselines_*.csv`). It drops all data after 2018 before computing anything.
+- **[`PROTOCOL.md`](PROTOCOL.md) registered in commit `e636450`**, before any tail model exists. Any later change goes in its section 10 as a labelled amendment.
+
+### Decisions and why
+1. **Small-sample p-values throughout.**
+   - At 99% a year has about 2.5 expected breaches, and the χ² approximations are poor: χ²-Kupiec has size 5.5% at n = 1,000, the exact version 4.3%.
+   - So Kupiec is exact (binomial), and Christoffersen and DQ are Monte Carlo under iid Bernoulli hits (Dufour 2006).
+2. **Pooled tests bootstrap the PITs by date.**
+   - Each market's PITs are replaced by their exact uniform ranks, which imposes "the model is right" while keeping the observed dependence between markets on the same day; whole dates are then resampled.
+   - TTF–NBP and Brent–WTI breach together, so stacking their hits would double-count. A HAC t-test on the per-date mean ran at 7.4% size at 99%; the PIT bootstrap at 5.0%.
+3. **10-day calibration tests use non-overlapping windows; 10-day ranking uses all windows.**
+   - Overlapping 10-day hits are autocorrelated by construction. For one market at 99%, every HAC variant tried rejected a correct model 13% of the time. Pooled HAC and block bootstraps ran at 7–10%.
+   - The mean of rare, clustered events is too skewed for a normal approximation with about 200 independent windows. Non-overlapping windows are independent under the null, so their tests are exact.
+   - Diebold–Mariano on overlapping FZ0 differences keeps its size (3–6% across the simulations, 20 lags), because loss differences are continuous.
+4. **FZ0 for ranking.** It is the Fissler–Ziegel member whose differences are unchanged by rescaling, so it can be pooled across markets and regimes (the role QLIKE played for variance).
+5. **Selection rule (PROTOCOL §4.2):** the model confidence set on validation FZ0, then a calibration screen, then the simplest survivor.
+   - I chose "simplest in the confidence set" over "lowest point estimate" because validation has 1,031 days and the minimum detectable effect between similar models is about a 9% scale error. A lower point estimate would mostly reflect noise.
+   - The calibration screen makes selection serve the primary question (is it calibrated?), not only ranking.
+
+### Results (development data only)
+**Baselines on the 2015–18 validation window** (`results/p1_baselines_*.csv`):
+
+| | hs500 | riskmetrics | ewma_cal |
+|---|---|---|---|
+| Pooled FZ0, 1-day, α = 2.5% (lower is better) | −2.68 | −2.87 | **−2.88** |
+| Long 99% breach rate (pooled p) | 1.3% (0.07) | 1.8% (0.000) | 1.4% (0.008) |
+| Short 99% breach rate (pooled p) | 1.2% (0.15) | 1.4% (0.010) | 1.2% (0.20) |
+| Pooled ES 97.5%, long / short (p) | 0.006 / 0.004 | 0.000 / 0.002 | 0.018 / 0.16 |
+| Market-sides failing DQ at 99% | 11 of 12 | 8 of 12 | 5 of 12 |
+
+- **Calibrated EWMA ranks first** and is the only baseline in the 10% model confidence set at both horizons and both levels. Historical simulation is far behind at 1 day (FZ0 +0.20, p < 0.001); at 10 days the gap is not significant (p = 0.20).
+- **No baseline is calibrated.**
+  - Every one fails somewhere, mainly on the long side and on ES: oil's heavy left tail, as session 1 found.
+  - Calibrated EWMA's short side passes.
+  - DQ failures for calibrated EWMA come from European gas and EUA, consistent with the weekday effects.
+- **So there is room for the tail model, and the bar is calibrated EWMA, not RiskMetrics or historical simulation.**
+- **What the test window can detect** (2.8 standard errors, from validation, scaled to about 1,950 test days):
+  - Similar models (e.g. calibrated EWMA vs RiskMetrics): an FZ0 difference of 0.010 at 1 day, α = 2.5%, roughly a **9% scale error**. At α = 1% it is 0.020 (12%). At 10 days, 0.026 (15%) and 0.047 (20%).
+  - Very different models (historical simulation vs calibrated EWMA): 0.073 at 1 day (about a 27% scale error). At 10 days the required difference exceeds anything observed.
+
+**Size and power of the tests** (`results/p1_test_size.csv`; full table in PROTOCOL §6):
+- **Every test rejects a correct model at 0.5–8% at the 5% level** (200 replications, ±1.5 points).
+  - The pooled ES test's 8% was noise: with 1,000 replications the three primary pooled tests run at 3.6–4.3% (`results/p1_primary_size.csv`).
+  - Diebold–Mariano is slightly conservative (3–3.5%).
+- **McNeil–Frey is the test that sees thin tails:** it has 100% power against normal tails on t(4) data, against 38% for Acerbi–Székely and 52% for Du–Escanciano.
+  - So its rejection of calibrated EWMA in 7 of 12 development market-sides is real evidence that the normal shape is too thin, not an oversized test (its size is 4%).
+  - It is weak against scale errors (17%), where Acerbi–Székely and Du–Escanciano are strong (93–94%). The tests are complementary.
+- **Only DQ with weekday regressors detects a Monday effect** (47% at 97.5%); breach counts can't.
+- **Coverage at 97.5% is blind to tail shape**, because normal and t(4) quantiles nearly coincide there.
+- **10-day tests detect scale errors when pooled (73–84%) but hardly tail shape.**
+
+### Things I'm unsure about
+1. **The simulations assume a Gaussian copula** (pairs at 0.9) and t(5) marginals. Real joint tails may cluster more, which would make the pooled tests somewhat over-sized. Session 1 found joint tails close to Gaussian for the correlated pairs, so I expect this to be small.
+2. **The "scale error" translation of the MDEs assumes a pure scale error under t(5) losses.** Real model differences are not pure scale errors; treat it as a rough guide.
+3. **The selection rule's complexity order is a judgement.** It is fixed now, before any candidate exists, which is what matters.
+
+### Next: Phase 2 (scale models, 1-day and 10-day)
+1. Port GARCH and HAR, the walk-forward and the calibration from the previous repo, with their tests.
+2. Add weekday factors (point-in-time, shrunk), filtered implied vol with an EWMA fallback, and multi-step term structures for 10 days.
+3. Judge them on the validation window by QLIKE at 1 and 10 days, by normal-VaR breach rates by weekday and vol state, and by FZ0 with a normal shape. Shapes come in Phase 3.
 
 ---
 
 ## Session 1 (2026-10-24): setup, re-verification, tail exploration, proposed plan
 
-**Status: waiting for Oliver's approval of the plan below.** Nothing beyond setup, the data pipeline port and exploration has been built.
+**Status: approved by Oliver as proposed (start of session 2).**
 
 ### Done
 - **Repo and data guard.** `git init`; `.gitignore` excludes `data/` and every data-file format; `scripts/hooks/pre-commit` (adapted from energy-vol-targeting) blocks anything under a `data/` folder, data-file extensions, notebooks, CSVs outside `results/`, results files long enough to be a daily series, and files over 2 MB. A new `scripts/hooks/commit-msg` rejects AI attribution lines. Each rule was tested by trying to commit a violating file (the workbook, a parquet, a notebook, stray and nested CSVs, a 500-row results table, a file under `etr/data/`, a 3 MB file, a message with a `Co-Authored-By` trailer): all were blocked. **A fresh clone must run `git config core.hooksPath scripts/hooks`.**
@@ -110,7 +201,7 @@ Daily returns are standardised by the volatility forecast known the evening befo
 
 ---
 
-## Proposed plan
+## Plan (approved by Oliver, 2026-10-24)
 
 ### Layout (a handful of modules)
 ```
