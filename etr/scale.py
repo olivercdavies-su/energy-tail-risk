@@ -296,14 +296,18 @@ def _year_forecasts(df: pd.DataFrame, y: int, wd_factors: pd.Series, iv: pd.Seri
     return out
 
 
-def walk_forward(rets: dict[str, pd.DataFrame], years: list[int], iv: dict[str, pd.Series] | None = None):
+def walk_forward(rets: dict[str, pd.DataFrame], years: list[int], iv: dict[str, pd.Series] | None = None,
+                 keep_insample: bool = False):
     """Calibrated scale forecasts for every market, model and horizon, at every origin in
-    `years`. Returns ({market: frame of forecasts + targets}, diagnostics frame).
-    Weekday factors are estimated per year from each market's last WEEKDAY_YEARS years and
-    shrunk across markets (so all markets are processed together)."""
+    `years`. Returns ({market: frame of forecasts + targets}, diagnostics frame), plus, with
+    keep_insample, {(market, year, "<model>_<h>"): calibrated forecasts at that year's
+    training origins from its current parameters} (the source of standardised residuals for
+    the shapes). Weekday factors are estimated per year from each market's last
+    WEEKDAY_YEARS years and shrunk across markets (so all markets are processed together)."""
     iv = iv or {}
     frames = {name: [] for name in rets}
     diag = []
+    insample = {}
     tg = {name: targets(df) for name, df in rets.items()}
     for y in years:
         cut = pd.Timestamp(f"{y - 1}-12-31")
@@ -333,8 +337,10 @@ def walk_forward(rets: dict[str, pd.DataFrame], years: list[int], iv: dict[str, 
                 cols[f"{m}_sqrt10"] = 10 * cols[f"{m}_1"]
                 cols[f"{m}_10"] = cal[(m, 10)][0].reindex(idx)
             frames[name].append(pd.DataFrame(cols, index=idx))
+            if keep_insample:
+                insample.update({(name, y, f"{m}_{h}"): v[1] for (m, h), v in cal.items()})
             diag.extend({"market": name, **d} for d in info)
             diag.extend({"market": name, "year": y, "model": "weekday", "weekday": k, "factor": f}
                         for k, f in wd[name].items())
     out = {name: pd.concat(fr).join(tg[name][["y1", "y10"]]) for name, fr in frames.items()}
-    return out, pd.DataFrame(diag)
+    return (out, pd.DataFrame(diag), insample) if keep_insample else (out, pd.DataFrame(diag))

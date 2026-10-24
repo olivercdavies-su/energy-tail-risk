@@ -35,6 +35,19 @@ MUTATIONS = [
      "weekday factors see the forecast year"),
     ("etr/scale.py", "                cal[(\"iv\", h)] = tuple(a.fillna(b) for a, b in zip(cal[(\"iv\", h)], cal[(\"ewma\", h)]))",
      "                cal[(\"iv\", h)] = cal[(\"iv\", h)]", "implied vol without its EWMA fallback"),
+    ("etr/engine.py", "    z = z[(target <= cut).to_numpy()]", "    z = z[(target <= cut + pd.DateOffset(months=3)).to_numpy()]",
+     "shape residuals run past the training cut"),
+    ("etr/tails.py", "        return self.ppf(1 - np.asarray(u, float))\n\n    def cdf(self, x):\n        x = np.asarray(x, float)\n        return self._D.cdf(",
+     "        return self.ppf(np.asarray(u, float))\n\n    def cdf(self, x):\n        x = np.asarray(x, float)\n        return self._D.cdf(",
+     "skewed-t upper tail read from the wrong end"),
+    ("etr/tails.py", "            out[n] = GPDTails(zs[n], (xl, bl), (xr, br))", "            out[n] = GPDTails(zs[n], (xr, br), (xl, bl))",
+     "GPD left and right tails swapped"),
+    ("etr/tails.py", "        w = np.r_[np.ones(kf), k - kf] / k", "        w = np.r_[np.ones(kf), 0.0] / kf",
+     "filtered-HS ES without the fractional weight"),
+    ("etr/engine.py", "        cut = pd.Timestamp(f\"{y - 1}-12-31\")\n        zs =", "        cut = pd.Timestamp(f\"{y}-12-31\")\n        zs =",
+     "shapes fitted on the forecast year"),
+    ("etr/tails.py", "    return [SkewT(r.x[0], lam) for lam in r.x[1:]]", "    return [SkewT(r.x[0], r.x[1]) for lam in r.x[1:]]",
+     "pooled skewed-t forces one asymmetry"),
 ]
 failed_to_catch = []
 for path, old, new, label in MUTATIONS:
@@ -43,7 +56,8 @@ for path, old, new, label in MUTATIONS:
     assert src.count(old) == 1, (label, "pattern not found")
     f.write_text(src.replace(old, new))
     try:
-        r = subprocess.run([sys.executable, "-m", "pytest", "-q", "-x", "tests/test_tails.py", "tests/test_backtest.py", "tests/test_scale.py"],
+        r = subprocess.run([sys.executable, "-m", "pytest", "-q", "-x", "tests/test_tails.py", "tests/test_backtest.py", "tests/test_scale.py",
+                            "tests/test_shapes.py"],
                            capture_output=True, text=True, cwd=ROOT)
     finally:
         f.write_text(src)
