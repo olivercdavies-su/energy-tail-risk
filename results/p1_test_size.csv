@@ -1,0 +1,21 @@
+test,size (H0),scale_low,normal_tail,monday
+10d_kupiec_nonoverlap_975,0.025,0.26,0.015,
+10d_kupiec_nonoverlap_99,0.005,0.19,0.02,
+10d_pooled_coverage_nonoverlap_975,0.07,0.8,0.035,
+10d_pooled_coverage_nonoverlap_99,0.06,0.73,0.145,
+10d_pooled_es_nonoverlap_975,0.065,0.835,0.115,
+acerbi_szekely_z2_975,0.03,0.94,0.375,0.06
+christoffersen_cc_99,0.045,0.73,0.48,0.05
+dm_fz0_pooled_10d,0.035,,,
+dm_fz0_pooled_1d,0.03,,,
+dq_weekdays_975,0.045,0.725,0.06,0.47
+dq_weekdays_99,0.035,0.545,0.325,0.215
+du_escanciano_975,0.04,0.93,0.52,0.09
+kupiec_975,0.035,0.905,0.025,0.05
+kupiec_99,0.045,0.74,0.51,0.06
+mcneil_frey_975,0.04,0.17,1.0,0.065
+pooled_coverage_975,0.045,1.0,0.045,0.075
+pooled_coverage_99,0.055,1.0,0.98,0.1
+pooled_coverage_hac_975,0.055,1.0,0.06,0.085
+pooled_coverage_hac_99,0.06,1.0,0.965,0.09
+pooled_es_975,0.08,1.0,0.93,0.085

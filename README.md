@@ -4,7 +4,15 @@
 
 It builds on [energy-vol-targeting](https://github.com/olivercdavies-su/energy-vol-targeting). That project found that volatility forecasts are good enough for sizing, but that the tails beyond the 95% level are not modelled well. Its data pipeline (contract-consistent returns built from exchange expiry rules) is reused here.
 
-> **Status:** session 1 complete. The repo and data guard are set up, the earlier findings re-verified, tail behaviour explored on 2011–18, and a phased plan proposed. See [`PROJECT_LOG.md`](PROJECT_LOG.md).
+> **Status:** Phase 1 complete. The evaluation toolkit is built and checked by simulation, and the final test is pre-registered in [`PROTOCOL.md`](PROTOCOL.md) before any tail model exists. The 2019–26 test window stays sealed until the frozen engine is run once. See [`PROJECT_LOG.md`](PROJECT_LOG.md).
+
+## How the engine will be judged
+
+Every forecast is scored on both tails: a unit long position (loses when prices fall) and a unit short (loses when they rise). There are two questions:
+- **Is it calibrated?** Breach rates at 99% and 97.5%, and Expected Shortfall, are tested pooled across markets. Markets that crash together count as the partly redundant evidence they are. Supporting per-market tests: Kupiec, Christoffersen, dynamic quantile, Acerbi–Székely, Du–Escanciano, McNeil–Frey and the Basel traffic light.
+- **Is it better than what desks use?** Historical simulation, RiskMetrics and calibrated EWMA are ranked by FZ0, a scoring function for VaR and ES jointly, with Diebold–Mariano tests and a model confidence set.
+
+Each test's size and power at this project's sample sizes were checked by simulation first ([`results/p1_test_size.csv`](results/p1_test_size.csv)).
 
 ## First look at the tails (2011–2018, development data only)
 
@@ -37,7 +45,10 @@ cp <your workbook>.xlsx data/raw/
 python scripts/build_data.py        # -> data/processed/ (gitignored)
 python scripts/p0_reverify.py       # re-verification tables
 python scripts/p0_tails.py          # tail exploration tables and chart
+python scripts/p1_test_size.py      # size and power of every test, by simulation (~15 min)
+python scripts/p1_baselines.py      # baselines on 2012-18 development data
 pytest                              # real-data tests skip without the workbook
+python scripts/mutation_check.py    # injects known bugs; each must make a test fail
 ```
 
 ## Licence

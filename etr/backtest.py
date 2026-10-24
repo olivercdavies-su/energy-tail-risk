@@ -254,8 +254,8 @@ def _hac_mean(x: np.ndarray, lags: int, kernel: str = "bartlett") -> tuple[float
 def diebold_mariano(d, lags: int = 5) -> dict:
     """Is the mean loss differential d = loss_a - loss_b zero? HAC (Newey-West) t-test.
     p_less is one-sided for model a being better (mean d < 0). Simulated size on pooled FZ0
-    differentials (results/p1_test_size.csv): about 4-5% at 1 day with 5 lags, and 5-6%
-    for overlapping 10-day windows with 2h = 20 lags."""
+    differentials: 3-6% at 1 day with 5 lags and for overlapping 10-day windows with
+    2h = 20 lags (results/p1_test_size.csv and PROJECT_LOG.md, session 2)."""
     d = np.asarray(d, float)
     d = d[np.isfinite(d)]
     m, se = _hac_mean(d, lags)
@@ -300,8 +300,9 @@ def coverage_pooled(u_panel: pd.DataFrame, alpha: float, n_boot: int = 1999, see
     Two-sided p-value from the PIT bootstrap above, so markets that breach together count
     as the partly redundant evidence they are, and the skew of a mean of rare events is
     respected. Dates must be independent under the null: 1-day forecasts, or non-overlapping
-    multi-day windows (see `nonoverlapping`). Simulated size about 4-5%
-    (results/p1_test_size.csv), against about 7% for a HAC t-test at the 99% level."""
+    multi-day windows (see `nonoverlapping`). Simulated size 3.6-4.1% (1,000 replications,
+    results/p1_primary_size.csv), against about 7% for a HAC t-test at the 99% level
+    (PROJECT_LOG.md, session 2)."""
     obs, draws = _pit_bootstrap(u_panel, lambda U: _pooled_rate(U, alpha), n_boot, seed)
     centre = draws.mean()
     p = (1 + np.sum(np.abs(draws - centre) >= abs(obs - alpha) - 1e-12)) / (1 + n_boot)
@@ -324,9 +325,9 @@ def es_pooled(u_panel: pd.DataFrame, alpha: float, n_boot: int = 1999, seed: int
 def coverage_hac(hit_panel: pd.DataFrame, alpha: float, lags: int = 5, kernel: str = "bartlett") -> dict:
     """HAC t-test that the per-date mean hit equals alpha. Kept for descriptive use with
     overlapping windows (kernel "uniform", lags h-1: the Hansen-Hodrick choice). Its size is
-    poor for rare events (about 7% pooled and 13% for one market at 99%, 10 days,
-    results/p1_test_size.csv), so registered tests use `coverage_pooled` and `kupiec` on
-    non-overlapping windows instead."""
+    poor for rare events (about 7% pooled and 13% for one market at 99%, 10 days; PROJECT_LOG.md,
+    session 2), so registered tests use `coverage_pooled` and `kupiec` on non-overlapping
+    windows instead."""
     x = date_mean(hit_panel.astype(float))
     m, se = _hac_mean(x.to_numpy() - alpha, lags, kernel)
     t = m / se if se > 0 else np.nan
