@@ -170,3 +170,14 @@ def test_shapes_for_a_year_ignore_that_years_returns(walk):
     fc2, _, ins2 = scale.walk_forward(shocked, [2016], keep_insample=True)
     _, p1 = engine.one_day(shocked, fc2, ins2, [2016], "gjr_1", "gpd_mkt")
     assert p0 == p1
+
+
+def test_gpd_never_bounds_losses_and_short_es_stays_finite():
+    """Light-tailed exceedances (true xi < 0) are fitted at xi = 0, not with a finite
+    maximum loss; and a very heavy tail cannot blow up a short position's ES."""
+    rng = np.random.default_rng(7)
+    xi, _ = tails.fit_gpd([stats.genpareto(-0.3, scale=0.5).rvs(3000, random_state=rng)])
+    assert xi == pytest.approx(0.0, abs=1e-3)
+    heavy = tails.StudentT(2.05)
+    es = tails.tail_mean(lambda z: np.expm1(0.1 * z), heavy, 0.025, True)
+    assert np.isfinite(es) and es < np.expm1(0.1 * tails.Z_CAP)

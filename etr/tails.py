@@ -27,6 +27,12 @@ from scipy import optimize, stats
 SIDES = ("long", "short")
 ALPHAS = (0.05, 0.025, 0.01)
 HS_WINDOW = 500
+# Standardised moves beyond +/-Z_CAP sigma are treated as impossible when integrating ES and
+# drawing from a forecast. A short position's loss exp(R) - 1 has infinite expectation under
+# any power-law tail in R, so without a cap its ES is set by numerically extreme quantiles
+# (EUA short in 2013: 2.6e45). The largest move in the data is 13 sigma, so 50 changes
+# nothing for realistic tails.
+Z_CAP = 50.0
 
 
 def col(kind: str, alpha: float) -> str:
@@ -112,7 +118,7 @@ def tail_mean(g: Callable[[np.ndarray], np.ndarray], shape, alpha: float, upper:
     if hasattr(shape, "tail_mean"):                                   # exact for empirical shapes
         return shape.tail_mean(g, alpha, upper)
     u = alpha * _NODES ** 2
-    q = shape.isf(u) if upper else shape.ppf(u)
+    q = np.clip(shape.isf(u) if upper else shape.ppf(u), -Z_CAP, Z_CAP)
     return np.sum(g(q) * 2 * _NODES * _WEIGHTS, axis=-1)
 
 
@@ -140,7 +146,7 @@ def scale_shape_forecast(df: pd.DataFrame, var_h: pd.Series, side: str, h: int =
 
     def sampler(rng, n, rows):
         ss = s if rows is None else s[rows]
-        return to_loss(ss[None, :] * shape.rvs(size=(n, len(ss)), random_state=rng), side)
+        return to_loss(ss[None, :] * np.clip(shape.rvs(size=(n, len(ss)), random_state=rng), -Z_CAP, Z_CAP), side)
 
     return Forecast(frame, sampler)
 
@@ -308,11 +314,12 @@ def _gpd_beta(xi: float, e: np.ndarray) -> tuple[float, float]:
 def fit_gpd(exceedances: list[np.ndarray]) -> tuple[float, list[float]]:
     """Maximum likelihood with one tail index xi shared by all the exceedance sets and a
     scale beta for each (one set alone gives the usual per-tail fit). xi is restricted to
-    (-0.5, 1): beyond those values the estimator's asymptotics fail, and session 1's
-    estimates were -0.12 to 0.24."""
+    [0, 0.5): xi < 0 would put a finite maximum on losses (per-market fits on two to four
+    years of data often estimate that, and then call the next big move impossible), and
+    xi >= 0.5 would mean infinite variance, which unit-variance residuals cannot have."""
     def profile(xi):
         return sum(_gpd_beta(xi, e)[1] for e in exceedances)
-    xi = float(optimize.minimize_scalar(profile, bounds=(-0.49, 0.99), method="bounded").x)
+    xi = float(optimize.minimize_scalar(profile, bounds=(0.0, 0.49), method="bounded").x)
     return xi, [_gpd_beta(xi, e)[0] for e in exceedances]
 
 

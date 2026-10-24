@@ -48,6 +48,10 @@ MUTATIONS = [
      "shapes fitted on the forecast year"),
     ("etr/tails.py", "    return [SkewT(r.x[0], lam) for lam in r.x[1:]]", "    return [SkewT(r.x[0], r.x[1]) for lam in r.x[1:]]",
      "pooled skewed-t forces one asymmetry"),
+    ("etr/tails.py", "    xi = float(optimize.minimize_scalar(profile, bounds=(0.0, 0.49), method=\"bounded\").x)",
+     "    xi = float(optimize.minimize_scalar(profile, bounds=(-0.49, 0.99), method=\"bounded\").x)", "GPD allows a finite maximum loss"),
+    ("etr/tails.py", "    q = np.clip(shape.isf(u) if upper else shape.ppf(u), -Z_CAP, Z_CAP)",
+     "    q = shape.isf(u) if upper else shape.ppf(u)", "no cap on extreme moves in ES"),
 ]
 failed_to_catch = []
 for path, old, new, label in MUTATIONS:
