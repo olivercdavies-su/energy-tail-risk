@@ -9,6 +9,18 @@ For each forecast year Y and configuration (scale, shape):
   2. The shape is fitted to those residuals, per market or pooled across markets.
   3. Year-Y forecasts: etr.tails.scale_shape_forecast with the scale's year-Y forecasts.
 Nothing in a year's forecasts uses that year's returns, except each origin's own past.
+
+10 days (PROTOCOL.md 4, Phase 4). Three ways to forecast the 10-day loss:
+  sqrt10  the 1-day engine scaled by sqrt(10): variance 10 x the 1-day forecast, the
+          shape fitted to daily residuals (the classic Basel scaling);
+  term    each scale model's own calibrated 10-day forecast, with the shape fitted to
+          10-day residuals R10 / sigma10 at training origins whose 10-day window ended by
+          the cut-off (overlapping windows; the shape then carries whatever happens inside
+          the horizon: rolls, volatility mean reversion, autocorrelation);
+  paths   filtered historical simulation along GJR paths (Barone-Adesi, Giannopoulos &
+          Vosper 1999): 2,000 ten-day paths per origin, each day's shock a resampled
+          standardised GJR residual and the variance updated by the GJR recursion, so a
+          fall raises the volatility of the rest of the path.
 """
 import numpy as np
 import pandas as pd
@@ -26,10 +38,13 @@ BASELINE_RANK = {"hs500": 3, "riskmetrics": 1, "ewma_cal": 1}
 
 
 def complexity(config: str) -> int:
+    """PROTOCOL 4.1: scale + shape ranks; at 10 days a term structure or path simulation
+    adds 1, square-root-of-time adds 0."""
     if config in BASELINE_RANK:
         return BASELINE_RANK[config]
     scale_name, shape_name = config.split("|")
-    return SCALE_RANK[scale_name.rsplit("_", 1)[0]] + SHAPE_RANK[SHAPES[shape_name][0]]
+    term = scale_name.endswith(("_10", "_paths"))
+    return SCALE_RANK[scale_name.rsplit("_", 1)[0]] + SHAPE_RANK[SHAPES[shape_name][0]] + int(term)
 
 
 def residuals(df: pd.DataFrame, var_ins: pd.Series, cut: pd.Timestamp) -> np.ndarray:
@@ -39,6 +54,114 @@ def residuals(df: pd.DataFrame, var_ins: pd.Series, cut: pd.Timestamp) -> np.nda
     target = pd.Series(df.index, index=df.index).shift(-1)
     z = z[(target <= cut).to_numpy()]
     return z[np.isfinite(z)].to_numpy()
+
+
+def residuals_10(df: pd.DataFrame, var_ins: pd.Series, cut: pd.Timestamp) -> np.ndarray:
+    """Standardised 10-day residuals R10 / sqrt(var10) at training origins whose 10-day
+    window ended on or before cut (overlapping windows)."""
+    z = tails.forward_returns(df, 10) / np.sqrt(var_ins.reindex(df.index))
+    end = pd.Series(df.index, index=df.index).shift(-10)
+    z = z[(end <= cut).to_numpy()]
+    return z[np.isfinite(z)].to_numpy()
+
+
+def ten_day(rets: dict[str, pd.DataFrame], fc: dict[str, pd.DataFrame], insample: dict, years: list[int],
+            scale_name: str, shape_name: str, approach: str) -> tuple[dict, list]:
+    """10-day forecasts of one configuration. approach "sqrt10": the 1-day engine (daily
+    residuals, variance 10 x the 1-day forecast); "term": the model's own 10-day forecast and
+    a shape fitted to 10-day residuals. scale_name is the model, e.g. "gjr"."""
+    kind, pooled = SHAPES[shape_name]
+    parts = {(n, s): [] for n in rets for s in tails.SIDES}
+    params = []
+    col = f"{scale_name}_sqrt10" if approach == "sqrt10" else f"{scale_name}_10"
+    for y in years:
+        cut = pd.Timestamp(f"{y - 1}-12-31")
+        if approach == "sqrt10":
+            zs = {n: residuals(df, insample[(n, y, f"{scale_name}_1")], cut) for n, df in rets.items()}
+        else:
+            zs = {n: residuals_10(df, insample[(n, y, f"{scale_name}_10")], cut) for n, df in rets.items()}
+        shapes = tails.fit_shapes(zs, kind, pooled)
+        for n, df in rets.items():
+            params.append({"year": y, "market": n, **describe(shapes[n])})
+            var = fc[n][col]
+            var_y = var.where(var.index.year == y).reindex(df.index)
+            for side in tails.SIDES:
+                parts[(n, side)].append(tails.scale_shape_forecast(df, var_y, side, 10, shapes[n]))
+    return {k: tails.concat(v) for k, v in parts.items()}, params
+
+
+def gjr_path_returns(sigma2_1: np.ndarray, params: pd.Series, pool: np.ndarray, rng: np.random.Generator,
+                     n_paths: int = 2000, h: int = 10) -> np.ndarray:
+    """Simulated h-day log returns (origins x paths) from a GJR-GARCH recursion. sigma2_1 is
+    each origin's one-step variance forecast (decimal units); each day's shock is a draw
+    from `pool` (standardised residuals) times that path's current volatility, and
+    s2_{k+1} = w + (a + g 1[r_k < 0]) r_k^2 + b s2_k."""
+    w = params["omega"] / 1e4
+    a, g, b = params["alpha[1]"], params["gamma[1]"], params["beta[1]"]
+    s2 = np.repeat(np.asarray(sigma2_1, float)[:, None], n_paths, axis=1)
+    total = np.zeros_like(s2)
+    for _ in range(h):
+        r = np.sqrt(s2) * pool[rng.integers(0, len(pool), s2.shape)]
+        total += r
+        s2 = w + (a + g * (r < 0)) * r ** 2 + b * s2
+    return total
+
+
+def gjr_paths(rets: dict[str, pd.DataFrame], diag: pd.DataFrame, years: list[int], pooled: bool,
+              n_paths: int = 2000, seed: int = 20261024) -> tuple[dict, list]:
+    """10-day forecasts by filtered historical simulation along GJR paths. Uses the same
+    yearly GJR fits as etr.scale.walk_forward (from its diagnostics frame), the in-sample
+    standardised residuals of those fits as the shock pool (per market, or pooled), and the
+    GJR 10-day calibration scale, so its average level matches the calibrated gjr_10."""
+    from etr import scale
+    parts = {(n, s): [] for n in rets for s in tails.SIDES}
+    info = []
+    for y in years:
+        cut = pd.Timestamp(f"{y - 1}-12-31")
+        fits, pools = {}, {}
+        for n, df in rets.items():
+            row = diag.query("market == @n and year == @y and model == 'gjr' and omega == omega").iloc[0]
+            params = row[["omega", "alpha[1]", "gamma[1]", "beta[1]", "nu"]].astype(float)
+            r = scale.daily_equivalent_returns(df)
+            res = scale._gjr(r.loc[:cut]).fix(params)
+            z = res.std_resid.iloc[60:].to_numpy()
+            pools[n] = z[np.isfinite(z)]
+            c10 = diag.query("market == @n and year == @y and model == 'gjr' and h == 10")["scale_c"].iloc[0]
+            fits[n] = (params, r, c10)
+        pooled_z = np.concatenate(list(pools.values()))
+        for k, (n, df) in enumerate(rets.items()):
+            params, r, c10 = fits[n]
+            s1 = scale.gjr_paths(r.loc[:f"{y}-12-31"], params, start=f"{y}-01-01", horizon=1)["h.1"]
+            fwd = tails.forward_returns(df, 10)
+            origins = s1.index[s1.index.isin(fwd.dropna().index)]
+            rng = np.random.default_rng([seed, y, k])
+            pool = pooled_z if pooled else pools[n]
+            R = gjr_path_returns(s1.loc[origins].to_numpy(), params, pool, rng, n_paths) * np.sqrt(c10)
+            info.append({"year": y, "market": n, "c10": c10, "pool_size": len(pool), "pool_mean_square": float(np.mean(pool ** 2))})
+            for side in tails.SIDES:
+                parts[(n, side)].append(simulated_forecast(fwd.loc[origins], R, side))
+    return {k: tails.concat(v) for k, v in parts.items()}, info
+
+
+def simulated_forecast(realised: pd.Series, sims: np.ndarray, side: str) -> tails.Forecast:
+    """A Forecast from simulated h-day log returns (origins x paths): VaR and ES by the
+    historical-simulation convention on the simulated losses, the PIT as the share of
+    simulated losses at least as large as the realised one, draws resampled from the paths."""
+    L = tails.to_loss(sims, side).astype(np.float32)
+    srt = -np.sort(-L, axis=1)
+    loss = tails.to_loss(realised.to_numpy(), side)
+    out = {"loss": loss}
+    for a in tails.ALPHAS:
+        out[tails.col("var", a)], out[tails.col("es", a)] = tails.empirical_var_es(srt.astype(float), a)
+    out["u"] = (L >= loss[:, None]).mean(1)
+    frame = pd.DataFrame(out, index=realised.index)
+
+    def sampler(rng, n, rows):
+        sub = L if rows is None else L[rows]
+        pick = rng.integers(0, sub.shape[1], (n, len(sub)))
+        return sub[np.arange(len(sub))[None, :], pick].astype(float)
+
+    return tails.Forecast(frame, sampler)
 
 
 def one_day(rets: dict[str, pd.DataFrame], fc: dict[str, pd.DataFrame], insample: dict, years: list[int],

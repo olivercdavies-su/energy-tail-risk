@@ -52,6 +52,15 @@ MUTATIONS = [
      "    xi = float(optimize.minimize_scalar(profile, bounds=(-0.49, 0.99), method=\"bounded\").x)", "GPD allows a finite maximum loss"),
     ("etr/tails.py", "    q = np.clip(shape.isf(u) if upper else shape.ppf(u), -Z_CAP, Z_CAP)",
      "    q = shape.isf(u) if upper else shape.ppf(u)", "no cap on extreme moves in ES"),
+    ("etr/engine.py", "    end = pd.Series(df.index, index=df.index).shift(-10)\n    z = z[(end <= cut).to_numpy()]",
+     "    end = pd.Series(df.index, index=df.index).shift(-10)\n    z = z[(end <= cut + pd.DateOffset(days=20)).to_numpy()]",
+     "10-day residual windows run past the cut"),
+    ("etr/engine.py", "        s2 = w + (a + g * (r < 0)) * r ** 2 + b * s2", "        s2 = w + (a + g * (r > 0)) * r ** 2 + b * s2",
+     "GJR paths with the leverage sign flipped"),
+    ("etr/engine.py", "            R = gjr_path_returns(s1.loc[origins].to_numpy(), params, pool, rng, n_paths) * np.sqrt(c10)",
+     "            R = gjr_path_returns(s1.loc[origins].to_numpy(), params, pool, rng, n_paths)", "GJR paths not calibrated"),
+    ("etr/engine.py", "    col = f\"{scale_name}_sqrt10\" if approach == \"sqrt10\" else f\"{scale_name}_10\"",
+     "    col = f\"{scale_name}_10\" if approach == \"sqrt10\" else f\"{scale_name}_sqrt10\"", "sqrt10 and term scales swapped"),
 ]
 failed_to_catch = []
 for path, old, new, label in MUTATIONS:
@@ -61,7 +70,7 @@ for path, old, new, label in MUTATIONS:
     f.write_text(src.replace(old, new))
     try:
         r = subprocess.run([sys.executable, "-m", "pytest", "-q", "-x", "tests/test_tails.py", "tests/test_backtest.py", "tests/test_scale.py",
-                            "tests/test_shapes.py"],
+                            "tests/test_shapes.py", "tests/test_ten_day.py"],
                            capture_output=True, text=True, cwd=ROOT)
     finally:
         f.write_text(src)
