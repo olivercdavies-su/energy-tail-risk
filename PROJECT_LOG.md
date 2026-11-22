@@ -4,6 +4,100 @@ What was decided, why, and what comes next, so any session can pick up from here
 
 ---
 
+## Session 5 (2026-11-18): Phase 4, the 10-day horizon. Done.
+
+### Done
+- **`etr/engine.py` gains three ways to forecast a 10-day loss:**
+  - **√10:** the 1-day engine scaled. Variance is 10 × the 1-day forecast and the shape is the daily one; this is the classic Basel scaling.
+  - **Term structure:** each scale model's own calibrated 10-day forecast, with a shape fitted to overlapping in-sample **10-day** residuals whose windows ended before the forecast year. The shape then carries whatever happens inside the horizon: rolls, volatility mean reversion, autocorrelation.
+  - **GJR path simulation:** filtered historical simulation along GJR-GARCH paths (Barone-Adesi, Giannopoulos & Vosper 1999).
+    - 2,000 ten-day paths per origin.
+    - Each day's shock is a resampled in-sample GJR residual (from the same market, or pooled), and the variance is updated by the GJR recursion, so a fall raises the volatility of the rest of the path.
+    - Paths are scaled by the GJR 10-day calibration.
+- **Complexity (PROTOCOL 4.1):** √10 adds nothing; a term structure or path simulation adds 1.
+- **113 tests.** New ones check:
+  - the √10 identity in log space;
+  - simulated 10-day variance against the analytic GJR term structure (within 2%);
+  - the leverage direction (positive γ skews 10-day returns left, negative γ right);
+  - the path calibration;
+  - in-sample 10-day residuals having mean square exactly 1;
+  - look-ahead for term and path forecasts;
+  - the 10-day residual purge (a January shock can't move that year's shapes);
+  - the A1 guard (a noisy, shortlisted model worse than B3 is excluded; B3 is chosen when nothing beats it).
+- **The mutation check now injects 27 bugs, all caught.** New: 10-day residual windows running past the cut-off, the leverage sign flipped in the paths, uncalibrated paths, √10 and term scales swapped, and the selection rule without the A1 guard.
+- **`scripts/p4_ten_day.py`:** 128 configurations plus the baselines on 2012–18 (data after 2018 dropped first), and the selection rule on 2015–18.
+
+### Decisions and why
+1. **10-day shapes are fitted to 10-day residuals, not daily ones.** Summing ten days thins the tails: on Brent and NBP in 2016 the pooled t's ν was 9.6 for 10-day residuals against 6.4 daily. A daily shape scaled by √10 therefore overstates the 10-day tail. That is exactly what the √10 candidates will show if it matters.
+2. **Path simulation is GJR only.** It needs a variance recursion, and GJR is the one model with a meaningful one: EWMA's is fixed, and HAR and the combinations are direct forecasts. The shock pool is filtered-HS style, so the shocks' fat tails and asymmetry come from the data.
+3. **Scoring uses every daily origin; calibration uses non-overlapping windows** (PROTOCOL Q3). Phase 1 showed Diebold–Mariano holds its size on overlapping FZ0 differences (3–6%) but breach tests don't on overlapping windows.
+
+### The registered rule chose historical simulation; Amendment A1
+**What the first run showed.** Applied as registered on 2015–18, the selection rule chose **historical simulation** as the 10-day engine.
+- It scored worse than B3: mean FZ0 0.135 higher in 2015–18, 0.326 higher in 2012–14.
+- It was in the 10% model confidence set only because its 10-day losses are too noisy to reject with four years of overlapping windows. Phase 1's power analysis predicted this ("beyond anything seen in development").
+- It passed the six non-overlapping calibration tests, which have little power with about 100 windows.
+- As the simplest shortlisted configuration (complexity 3), it won.
+
+**Its breach rates by market state show why it's a poor choice.** At 99% (expected 1%) it breached 0.1% of the time in calm markets and **3.4% in turbulent ones**. Its 500-day window is still full of calm days when a crisis starts.
+
+**Oliver's decision (2026-11-22): add a guard, recorded as Amendment A1 in PROTOCOL.md section 10.**
+- A configuration is eligible only if its validation mean FZ0 is no worse than B3's. B3 itself is always eligible.
+- The 1-day choice is unchanged.
+- This rule was changed after seeing what it picked on the validation window. It is labelled as such and made before the freeze; no 2019+ data has been seen.
+- Alternatives considered:
+  - keeping historical simulation;
+  - requiring the 10-day engine to use the 1-day engine's model, which would have picked GJR √10 + pooled t.
+- The first run's diagnostics then crashed on a date-slicing bug (fixed). The re-run reproduced the first run exactly; both scripts were then re-run under the amended rule.
+
+### Results (validation 2015–18; 2012–14 in brackets)
+| | Configurations |
+|---|---|
+| Built | 126 scale × shape (63 by √10, 63 by term structure) + 2 GJR path simulations + historical simulation + RiskMetrics × √10 |
+| In the 10% model confidence set | 84 of 130 (much wider than at 1 day: ten-day losses are noisier) |
+| Pass all six non-overlapping calibration tests | 103 of 130 |
+| **Chosen (amended rule)** | **`har_sqrt10\|t_mkt`: HAR scale × √10, per-market Student-t from daily residuals.** Complexity 4; FZ0 gain over B3 0.043 (t = 2.4) [2012–14: −0.054] |
+
+- **Other complexity-4 survivors:** HAR √10 + pooled t (0.043), GJR term + normal (0.042), GJR √10 + t (0.032–0.033).
+- **Best point estimates:** implied-vol term structure + t (0.067), HAR term + pooled filtered HS (0.066). GJR path simulation scores 0.059 (pooled shocks) and 0.057 (per-market shocks).
+
+What the table says (`results/p4_configs.csv`, `results/p4_configs.png`):
+1. **Term structure vs √10 is not settled.**
+   - For the same scale and shape, the term structure beats √10 in 51 of 63 pairs on 2015–18 (by 0.009 on average), but **loses in 59 of 63 on 2012–14** (by 0.039).
+   - The early-year 10-day calibrations rested on two to four years of data, including the turbulent 2010–11. So the term structures' advantage is not stable, and the rule's preference for the simpler √10 version costs nothing dependable.
+2. **Normal tails are much less of a problem at 10 days than at 1 day.** Summing ten days thins the tails: e.g. the implied-vol combination's term structure with a normal shape (0.056) passes all six tests.
+3. **2012–14 is a warning.** Nearly every GJR- and HAR-based 10-day configuration is worse than B3 there (−0.18 to −0.05), from refits on two to four years of data; implied-vol-based ones are about even (−0.06 to +0.02). The test window's refits have 9+ years, but the 10-day ranking evidence is fragile whichever rule is used.
+4. **Calibration by market state** (`results/p4_vol_state.csv`; pooled 99% breach rates, expected 1%):
+
+   | | Calm | Middle | Turbulent |
+   |---|---|---|---|
+   | Historical simulation | 0.1% | 2.1% | 3.4% |
+   | Calibrated EWMA × √10 (B3) | 2.2% | 2.3% | 0.8% |
+   | **HAR √10 + per-market t (chosen)** | 1.4% | 1.8% | 0.5% |
+   | GJR √10 + pooled t | 1.4% | 1.8% | 0.4% |
+   | Direct 10-day HAR + pooled t | **0.8%** | 1.9% | 1.0% |
+
+   - The scale-based models keep Phase 2's mild bias: volatility mean-reverts within ten days, so they are a little low in calm states and a little high in turbulent ones.
+   - The direct 10-day HAR is the most balanced. It is complexity 5, in the confidence set and passing, but not the simplest.
+5. **The chosen configuration's per-market tests** (`results/p4_supporting.csv`): 99% breaches 1.2% and 97.5% breaches 3.4% (overlapping, pooled). Unadjusted Kupiec on non-overlapping windows rejects in no market-side (B3 one, historical simulation two). With about 100 windows per market-side, these per-market tests have little power.
+
+### Things I'm unsure about
+1. **The 10-day choice is the least secure result so far.**
+   - The confidence set is wide, the calibration tests are weak, and the term-vs-√10 comparison reverses between windows.
+   - The test window's 10-day verdict (PROTOCOL Q3) will mostly answer "is it calibrated", not "is it better".
+2. **Amendment A1 was made after seeing the rule's output.** It is principled: an engine should never be chosen if it looks worse than the default it will be tested against. But it is a post-hoc change and is labelled as one.
+3. **The vol-state bias persists at 10 days.** A learned model with a vol-state input (Phase 6) is the natural place to try to remove it; the direct 10-day HAR already partly does.
+
+### Next: Phase 5 (portfolios)
+1. The registered books P1–P6 (long and short baskets, TTF–NBP and Brent–WTI spreads, European gas vs oil, 50 random books) on the union calendar.
+2. Methods:
+   - the univariate engine on each book's own P&L history;
+   - joint filtered historical simulation (each market's scale × resampled same-day residual vectors);
+   - baselines applied to the book (historical simulation, RiskMetrics, calibrated EWMA).
+3. The selection rule over P1–P5 on 2015–18, at 1 and 10 days.
+
+---
+
 ## Session 4 (2026-10-24): Phase 3, tail shapes and the 1-day engine. Done.
 
 Oliver kept the weekday model as registered (no amendment).

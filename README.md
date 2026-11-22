@@ -4,7 +4,7 @@
 
 It builds on [energy-vol-targeting](https://github.com/olivercdavies-su/energy-vol-targeting). That project found that volatility forecasts are good enough for sizing, but that the tails beyond the 95% level are not modelled well. Its data pipeline (contract-consistent returns built from exchange expiry rules) is reused here.
 
-> **Status:** Phase 3 complete. The evaluation toolkit is built and checked by simulation, the final test is pre-registered in [`PROTOCOL.md`](PROTOCOL.md), and the volatility models, tail shapes and 1-day engine are built and evaluated on development data. The 2019–26 test window stays sealed until the frozen engine is run once. See [`PROJECT_LOG.md`](PROJECT_LOG.md).
+> **Status:** Phase 4 complete. The evaluation toolkit is built and checked by simulation, the final test is pre-registered in [`PROTOCOL.md`](PROTOCOL.md) (one amendment, A1), and the volatility models, tail shapes and the 1-day and 10-day engines are built and evaluated on development data. The 2019–26 test window stays sealed until the frozen engine is run once. See [`PROJECT_LOG.md`](PROJECT_LOG.md).
 
 ## How the engine will be judged
 
@@ -36,6 +36,17 @@ After scaling by a volatility forecast, a Gaussian 99% VaR is breached on 0.7–
 - **Which fat-tailed shape is used matters far less than which volatility model.**
 - The pre-registered rule picks the simplest configuration that is statistically tied with the best and passes calibration: **GJR-GARCH with a pooled Student-t**. Across the 12 market-sides it has no Holm-adjusted rejection in any backtest. The choice is provisional until the learned models join the candidate set.
 
+## The 10-day horizon (2015–2018 validation)
+
+![10-day FZ0 gain by configuration](results/p4_configs.png)
+
+- Three ways to get a 10-day loss distribution were compared:
+  - scaling the 1-day engine by √10 (the Basel convention);
+  - each model's own 10-day forecast with a shape fitted to 10-day residuals;
+  - filtered historical simulation along GJR-GARCH paths.
+- **At 10 days the data can say much less.** 84 of 130 configurations are statistically indistinguishable from the best. Whether the term structures beat √10 reverses between 2012–14 and 2015–18.
+- **As registered, the selection rule picked historical simulation**, which scores worse than calibrated EWMA. In turbulent markets it breached its 99% VaR 3.4% of the time, against 1% expected. A guard now requires the chosen engine to be no worse than calibrated EWMA (protocol Amendment A1, recorded before any test data is seen). Under it the 10-day choice is **HAR volatility × √10 with a per-market Student-t**.
+
 ## Data and licensing
 
 Daily Bloomberg futures data, 2010–2026. **Bloomberg's licence forbids redistributing the data, so none of it is in this repository, raw or derived.** The repo holds only code, aggregated results tables and charts.
@@ -65,6 +76,7 @@ python scripts/p1_test_size.py      # size and power of every test, by simulatio
 python scripts/p1_baselines.py      # baselines on 2012-18 development data
 python scripts/p2_scale.py          # volatility models, 2012-18
 python scripts/p3_tails.py          # tail shapes, all configurations, the selection rule
+python scripts/p4_ten_day.py        # the 10-day horizon (about 40 minutes)
 pytest                              # real-data tests skip without the workbook
 python scripts/mutation_check.py    # injects known bugs; each must make a test fail
 ```
