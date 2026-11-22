@@ -181,3 +181,24 @@ def test_gpd_never_bounds_losses_and_short_es_stays_finite():
     heavy = tails.StudentT(2.05)
     es = tails.tail_mean(lambda z: np.expm1(0.1 * z), heavy, 0.025, True)
     assert np.isfinite(es) and es < np.expm1(0.1 * tails.Z_CAP)
+
+
+def test_selection_guard_excludes_shortlisted_models_worse_than_b3():
+    """Amendment A1: a noisy model that scores worse than B3 can sit in the confidence set
+    (its losses are too noisy to reject it) and be the simplest survivor; the guard keeps it
+    out. If nothing beats B3, B3 itself is chosen."""
+    rng = np.random.default_rng(8)
+    base = rng.normal(size=800)
+    def noise(sd):                                  # exactly zero-mean, so the means are as written
+        z = rng.normal(size=800)
+        return sd * (z - z.mean())
+    scores = pd.DataFrame({"ewma_1|normal": base + noise(0.3), "gjr_1|t_pool": base - 0.05 + noise(0.3),
+                           "hs500": base + 0.05 + noise(3.0)})
+    fails = pd.Series({"ewma_1|normal": 2, "gjr_1|t_pool": 0, "hs500": 0})
+    unguarded = engine.select(scores, fails, block=10)
+    assert unguarded.loc["hs500", "shortlisted"] and unguarded.loc["hs500", "chosen"]
+    guarded = engine.select(scores, fails, block=10, b3="ewma_1|normal")
+    assert not guarded.loc["hs500", "no_worse_than_b3"] and guarded.loc["gjr_1|t_pool", "chosen"]
+    worse = scores.drop(columns="gjr_1|t_pool")
+    only_b3 = engine.select(worse, fails.drop("gjr_1|t_pool"), block=10, b3="ewma_1|normal")
+    assert only_b3.loc["ewma_1|normal", "chosen"]

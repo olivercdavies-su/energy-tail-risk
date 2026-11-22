@@ -66,7 +66,7 @@ def evaluate(configs: dict) -> tuple[pd.DataFrame, str]:
         scores = pd.DataFrame({c: engine.pooled_fz0(f, a, b) for c, f in configs.items()})
         cal = {c: engine.pooled_calibration(f, a, b, seed=SEED) for c, f in configs.items()}
         fails = pd.Series({c: v["failures"] for c, v in cal.items()})
-        sel = engine.select(scores, fails, block=10, seed=SEED)
+        sel = engine.select(scores, fails, block=10, b3=B3, seed=SEED)
         for c in configs:
             dm = bt.diebold_mariano(scores[c] - scores[B3], lags=5) if c != B3 else {"mean_diff": 0.0, "t": np.nan}
             r = rows.setdefault(c, {"config": c, "complexity": engine.complexity(c)})
@@ -74,8 +74,8 @@ def evaluate(configs: dict) -> tuple[pd.DataFrame, str]:
                       f"{win}_t_vs_b3": -dm["t"], f"{win}_mcs_p": sel.loc[c, "mcs_p"], f"{win}_failures": fails[c]})
             if win == "2015-18":
                 r.update({k: v for k, v in cal[c].items() if k != "failures"})
-                r.update(shortlisted=sel.loc[c, "shortlisted"], passes_screen=sel.loc[c, "passes_screen"],
-                         chosen=sel.loc[c, "chosen"])
+                r.update(shortlisted=sel.loc[c, "shortlisted"], no_worse_than_b3=sel.loc[c, "no_worse_than_b3"],
+                         passes_screen=sel.loc[c, "passes_screen"], chosen=sel.loc[c, "chosen"])
         if win == "2015-18":
             chosen = sel.index[sel["chosen"]][0]
     t = pd.DataFrame(rows.values()).sort_values("2015-18_mean_fz0")

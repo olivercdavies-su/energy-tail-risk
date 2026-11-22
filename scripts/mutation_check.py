@@ -61,6 +61,8 @@ MUTATIONS = [
      "            R = gjr_path_returns(s1.loc[origins].to_numpy(), params, pool, rng, n_paths)", "GJR paths not calibrated"),
     ("etr/engine.py", "    col = f\"{scale_name}_sqrt10\" if approach == \"sqrt10\" else f\"{scale_name}_10\"",
      "    col = f\"{scale_name}_10\" if approach == \"sqrt10\" else f\"{scale_name}_sqrt10\"", "sqrt10 and term scales swapped"),
+    ("etr/engine.py", "    t[\"passes_screen\"] = t[\"shortlisted\"] & t[\"no_worse_than_b3\"] & (t[\"failures\"] == 0)",
+     "    t[\"passes_screen\"] = t[\"shortlisted\"] & (t[\"failures\"] == 0)", "selection without the A1 guard"),
 ]
 failed_to_catch = []
 for path, old, new, label in MUTATIONS:

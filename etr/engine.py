@@ -226,20 +226,31 @@ def pooled_calibration(forecasts: dict, start, end, h: int = 1, seed: int = 2026
     return out
 
 
-def select(scores: pd.DataFrame, failures: pd.Series, block: int, size: float = 0.10, seed: int = 20261024) -> pd.DataFrame:
-    """PROTOCOL 4.2 steps 2-4. scores: per-date pooled FZ0 (columns = configurations);
-    failures: number of the six pooled calibration tests each fails at 5%. Returns one row
-    per configuration with its MCS p-value, shortlist and screen flags, complexity, and the
-    chosen one marked."""
+def select(scores: pd.DataFrame, failures: pd.Series, block: int, b3: str | None = None, size: float = 0.10,
+           seed: int = 20261024) -> pd.DataFrame:
+    """PROTOCOL 4.2 steps 2-4, with Amendment A1. scores: per-date pooled FZ0 (columns =
+    configurations); failures: number of the six pooled calibration tests each fails at 5%;
+    b3: the column holding baseline B3 (calibrated EWMA-normal).
+    Amendment A1 (PROTOCOL section 10): a configuration is eligible only if its mean FZ0 on
+    the validation window is no worse than B3's. The model confidence set keeps any model it
+    cannot reject, and a model with very noisy losses is hard to reject however badly it
+    scores (at 10 days historical simulation was shortlisted with a mean FZ0 0.135 worse
+    than B3, and as the simplest survivor it would have been chosen). B3 is always eligible,
+    so "nothing beats calibrated EWMA" remains a possible answer.
+    Returns one row per configuration with its MCS p-value, the flags of each step,
+    complexity, and the chosen one marked."""
     P = scores.dropna()
     mcs = bt.model_confidence_set(P, size=size, block=block, reps=2000, seed=seed)
     t = pd.DataFrame({"mean_fz0": P.mean(), "mcs_p": mcs, "failures": failures.reindex(P.columns),
                       "complexity": [complexity(c) for c in P.columns]})
     t["shortlisted"] = t["mcs_p"] >= size
-    t["passes_screen"] = t["shortlisted"] & (t["failures"] == 0)
+    t["no_worse_than_b3"] = t["mean_fz0"] <= t.loc[b3, "mean_fz0"] + 1e-12 if b3 is not None else True
+    t["passes_screen"] = t["shortlisted"] & t["no_worse_than_b3"] & (t["failures"] == 0)
     pool = t[t["passes_screen"]]
     if pool.empty:                                   # rule 4: fewest failures, then simplest
-        pool = t[t["shortlisted"]]
+        pool = t[t["shortlisted"] & t["no_worse_than_b3"]]
+        if pool.empty:
+            pool = t.loc[[b3]]
         pool = pool[pool["failures"] == pool["failures"].min()]
     choice = pool.sort_values(["complexity", "mean_fz0"]).index[0]
     t["chosen"] = t.index == choice

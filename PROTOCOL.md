@@ -76,8 +76,8 @@ The final evaluation runs **once**, by a script committed unrun after the config
 **4.2 Selection rule** (validation window, 1-day and 10-day separately, before the freeze):
 1. **Score:** pooled FZ0 at α = 2.5% for every candidate and baseline. Pooled means the per-date mean over the 12 market-sides.
 2. **Shortlist:** the model confidence set at 10% (block bootstrap; blocks of 10 days at 1-day, 20 at 10-day).
-3. **Calibration screen:** keep the shortlisted configurations that pass all six pooled calibration tests of Q1 (Q3 at 10 days) on the validation window at the 5% level, unadjusted.
-4. **Choose:** the lowest-complexity survivor; ties go to the lower mean FZ0. If none passes step 3, take the shortlisted configuration with the fewest failures, then lowest complexity.
+3. **Calibration screen:** keep the shortlisted configurations that pass all six pooled calibration tests of Q1 (Q3 at 10 days) on the validation window at the 5% level, unadjusted, *and whose mean FZ0 on the validation window is no worse than B3's* (Amendment A1; B3 itself is always eligible).
+4. **Choose:** the lowest-complexity survivor; ties go to the lower mean FZ0. If none passes step 3, take the shortlisted configuration no worse than B3 with the fewest failures, then lowest complexity; if there is none, B3.
 5. **Portfolios:** chosen by the same rule over P1–P5.
 
 **4.3 Stress overlay.** It may enter as a candidate only if, on validation, its Brier skill score against the vol-state logistic baseline (Q5) is positive with a 90% block-bootstrap interval that excludes zero.
@@ -205,4 +205,18 @@ A difference below these is reported as "**not detectable** at this sample size"
 
 ## 10. Amendments before the freeze
 
-None yet. Each amendment must be decided on development data only and record its date, commit and reason. None may change a test, a decision rule or the test window.
+Each amendment must be decided on development data only and record its date, commit and reason. None may change a test, a decision rule (section 5) or the test window.
+
+**A1 (2026-11-22, Phase 4): a configuration must be no worse than B3 to be selected (rule 4.2, step 3).**
+- **What happened.** Applied as registered to the 10-day candidates on 2015–18, rule 4.2 chose historical simulation.
+  - It scored worse than B3 (mean FZ0 0.135 higher in 2015–18, 0.326 higher in 2012–14).
+  - It was in the 10% model confidence set only because its 10-day losses are too noisy to reject with four years of overlapping windows. Phase 1 had predicted this: the minimum detectable FZ0 difference between very different models at 10 days was larger than anything seen in development.
+  - It passed the six pooled calibration tests, which have little power with about 100 non-overlapping windows.
+  - Being the shortlisted configuration with the lowest complexity, it won.
+- **Why the rule needed changing.** The confidence set treats "cannot be rejected" as "about as good as the best". With a candidate whose losses are much noisier than the others', that reading fails. By market state, historical simulation's 99% breach rate was 0.1% in calm markets and 3.4% in turbulent ones: a choice no desk would make.
+- **The amendment.** A configuration is eligible only if its validation mean FZ0 is no worse than B3's. B3 is always eligible, so "nothing beats calibrated EWMA" remains a possible answer.
+- **Effect:**
+  - The 1-day choice is unchanged (GJR-GARCH-t scale, pooled Student-t shape).
+  - The 10-day choice changes from historical simulation to HAR × √10 with a per-market Student-t.
+  - No test, decision rule (section 5) or the test window changes, and no 2019+ data has been seen.
+- **Labelled clearly:** this rule was changed after seeing what it selected on the validation window. Oliver decided it (session 5), and it is recorded here before the freeze.
