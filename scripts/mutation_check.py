@@ -63,6 +63,18 @@ MUTATIONS = [
      "    col = f\"{scale_name}_10\" if approach == \"sqrt10\" else f\"{scale_name}_sqrt10\"", "sqrt10 and term scales swapped"),
     ("etr/engine.py", "    t[\"passes_screen\"] = t[\"shortlisted\"] & t[\"no_worse_than_b3\"] & (t[\"failures\"] == 0)",
      "    t[\"passes_screen\"] = t[\"shortlisted\"] & (t[\"failures\"] == 0)", "selection without the A1 guard"),
+    ("etr/portfolio.py", "            z = pool[rng.integers(0, len(pool), (len(days), n_paths))]",
+     "            z = pool[rng.integers(0, len(pool), (len(days), n_paths, pool.shape[1])), np.arange(pool.shape[1])]",
+     "joint FHS resamples markets independently"),
+    ("etr/portfolio.py", "            r = sig[:, None, :] * z * open_.to_numpy()[pos + k][:, None, :]",
+     "            r = sig[:, None, :] * z", "joint FHS ignores closed markets"),
+    ("etr/portfolio.py", "        var = pd.DataFrame({n: fc[n][scale_col] for n in ORDER}).reindex(U.index).ffill(limit=5)",
+     "        var = pd.DataFrame({n: fc[n][scale_col] for n in ORDER}).reindex(U.index).ffill(limit=5).shift(-1)",
+     "joint FHS reads volatility a day ahead"),
+    ("etr/portfolio.py", "    inv = 1 / vol\n", "    inv = vol\n", "books weighted by vol, not 1/vol"),
+    ("etr/portfolio.py", "        cols[n] = z[(z.index <= cut) & np.isfinite(z.to_numpy())]",
+     "        cols[n] = z[(z.index <= cut + pd.DateOffset(months=3)) & np.isfinite(z.to_numpy())]",
+     "joint residual pool runs past the cut"),
 ]
 failed_to_catch = []
 for path, old, new, label in MUTATIONS:
@@ -72,7 +84,8 @@ for path, old, new, label in MUTATIONS:
     f.write_text(src.replace(old, new))
     try:
         r = subprocess.run([sys.executable, "-m", "pytest", "-q", "-x", "tests/test_tails.py", "tests/test_backtest.py", "tests/test_scale.py",
-                            "tests/test_shapes.py", "tests/test_ten_day.py"],
+                            "tests/test_shapes.py", "tests/test_ten_day.py",
+                            "tests/test_portfolio.py"],
                            capture_output=True, text=True, cwd=ROOT)
     finally:
         f.write_text(src)

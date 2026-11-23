@@ -44,7 +44,8 @@ def complexity(config: str) -> int:
         return BASELINE_RANK[config]
     scale_name, shape_name = config.split("|")
     term = scale_name.endswith(("_10", "_paths"))
-    return SCALE_RANK[scale_name.rsplit("_", 1)[0]] + SHAPE_RANK[SHAPES[shape_name][0]] + int(term)
+    shape_rank = SHAPE_RANK["fhs"] if shape_name == "joint_fhs" else SHAPE_RANK[SHAPES[shape_name][0]]
+    return SCALE_RANK[scale_name.rsplit("_", 1)[0]] + shape_rank + int(term)
 
 
 def residuals(df: pd.DataFrame, var_ins: pd.Series, cut: pd.Timestamp) -> np.ndarray:
@@ -212,9 +213,10 @@ def pooled_fz0(forecasts: dict, start, end, alpha: float = 0.025) -> pd.Series:
 
 def pooled_calibration(forecasts: dict, start, end, h: int = 1, seed: int = 20261024) -> dict:
     """The six pooled tests of PROTOCOL Q1 (Q3 at 10 days, on non-overlapping windows):
-    coverage at 99% and 97.5% and ES at 97.5%, per side."""
+    coverage at 99% and 97.5% and ES at 97.5%, per side. Books have one side (the book
+    itself), so for them it is three tests."""
     out = {}
-    for side in tails.SIDES:
+    for side in [s for s in tails.SIDES if any(k[1] == s for k in forecasts)]:
         U = pd.DataFrame({k: (bt.nonoverlapping(f.between(start, end).frame, h) if h > 1 else f.between(start, end).frame)["u"]
                           for k, f in forecasts.items() if k[1] == side})
         for alpha in (0.01, 0.025):
