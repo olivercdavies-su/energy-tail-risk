@@ -4,6 +4,123 @@ What was decided, why, and what comes next, so any session can pick up from here
 
 ---
 
+## Session 6 (2026-11-23): Phase 5, portfolios. Done.
+
+### Done
+- **`etr/portfolio.py`:**
+  - **The registered books** (PROTOCOL section 2):
+    - P1 long basket, weights ∝ 1/vol (13% EUA to 20% TTF), about 22% annual vol;
+    - P2 = −P1;
+    - P3 TTF–NBP and P4 Brent–WTI spreads, equal risk per leg, about 6% vol each: one fifth of a leg, because each pair moves together;
+    - P5 European gas vs oil, the legs carrying equal P&L risk, about 21% vol;
+    - 50 random books R01–R50, fixed seed.
+  - **Returns on the union calendar.** A closed market contributes nothing that day and its next return covers the gap; all six are open on 96.5% of days.
+  - **Joint filtered historical simulation.**
+- **How a book's return is defined.** A book is rebalanced daily to fixed weights of its value, so its daily return is Σ wᵢ(e^{rᵢ} − 1) and an h-day loss compounds those returns. Written as a log return, a book is just another one-sided "market", and the whole single-market engine applies unchanged.
+- **Engine changes:**
+  - Pooled calibration handles one-sided books: three pooled tests instead of six.
+  - Simulated forecasts can drop their paths when only VaR, ES and the PIT are needed (about 70 MB per configuration otherwise).
+- **125 tests.** New ones check:
+  - the books against the protocol (1/vol weights, P2 = −P1, equal-risk legs, fixed random books);
+  - the union calendar;
+  - daily compounding of book losses;
+  - that joint FHS keeps same-day dependence (a hedged spread of near-identical markets must simulate under a quarter of a leg's VaR);
+  - that closed markets don't move in a simulation;
+  - look-ahead;
+  - that a year's residual pool ignores that year's returns.
+- **The mutation check now injects 35 bugs, all caught.** New:
+  - resampling markets independently;
+  - ignoring closed markets;
+  - reading volatility a day ahead;
+  - weighting by vol instead of 1/vol;
+  - a residual pool running past the cut-off;
+  - selection without collapsing identical forecasts;
+  - arch's tie-unsafe MCS elimination;
+  - misaligned complexities in the selection table.
+- **`scripts/p5_portfolios.py`:** P1–P5 at 1 and 10 days, the selection rule over P1–P5, the random books with the chosen methods, and a dependence check. Data after 2018 is dropped first; books holding TTF are evaluated from 2014.
+
+### Decisions and why
+1. **Two ways to forecast a book: its own history, or its markets jointly.**
+   - The univariate engine on the book's return history is what most desks run: revalue today's book on past returns. With fixed weights, EWMA on the book's returns equals w′(EWMA covariance)w, so it also covers the RiskMetrics-covariance Gaussian baseline the plan listed.
+   - Joint filtered HS uses each market's own volatility forecast and resamples whole days' residual vectors (only days when all six traded), so same-day dependence comes from the data. Session 1 found the joint tails too sparse to fit a copula.
+2. **Joint filtered HS is run with every market scale model,** including implied vol, which exists for markets though not for books. At 10 days it uses the √10 or the term-structure variance spread evenly over the days.
+3. **Each book lives on its own markets' calendar** (the union of *its* markets' trading days), not the six-market calendar. The first run put every book on the six-market calendar.
+   - So the Brent–WTI spread had days when neither leg traded, its next-day loss was certainly zero, and joint FHS forecast an ES of exactly 0, which FZ0 rightly rejected ("FZ0 needs a positive ES").
+   - A book does not "trade" on a day all its markets are closed. This changes nothing for P1, P2, P5 and the random books, which hold all six markets.
+   - The simulation core became a separate function, so "a closed market does not move" is tested exactly: same seed, changing a closed market's weight changes nothing.
+4. **The selection rule now treats identical forecasts as one model.** The second run then crashed inside the model confidence set.
+   - For the books, weekday EWMA came out *identical* to plain EWMA. Empirical-Bayes shrinkage estimated the spread of true weekday effects across the five books as zero, so every factor shrank to exactly 1. That is itself a finding: a book mixes the European-gas Monday with the oil Wednesday, and they wash out.
+   - Two identical loss series make the bootstrap variance of their difference zero, and arch's elimination step fails on the resulting NaN.
+   - Identical forecasts are now collapsed to the simplest name before the confidence set, and the others flagged as duplicates. That is the complexity tie-break applied one step earlier.
+   - No earlier phase had duplicates (the MCS would have failed the same way), so its results are unaffected.
+   - Diebold–Mariano now returns "no difference" (t = 0, p = 1) when two forecasts' losses are identical on every date, instead of dividing zero by zero.
+5. **Books are forecast long-only.**
+   - The single-market engine produces long *and* short forecasts. For a book the "short side" is just another book (P1 short is P2), while joint FHS forecasts only the book itself.
+   - So univariate configurations were being pooled over ten book-sides and screened on six calibration tests, against five and three for joint FHS: not a fair comparison. Every method now forecasts the book itself.
+   - An end-to-end smoke run (two years, three scales, results to scratch) found this: it reported "3 of **100** random books". It also found that a baseline could legitimately be chosen at 10 days, which the random-books step didn't yet handle. Running the whole pipeline small before the full run (about an hour) is now the routine.
+6. **The model confidence set is now tie-safe.** The next full run failed in arch's MCS when two *different* pairs of models tied exactly for the largest statistic: arch tries to eliminate both at once and breaks.
+   - `etr.backtest` subclasses arch's MCS and changes only the elimination step:
+     - take the first maximum, which is what arch does whenever the maximum is unique;
+     - treat a zero-variance pair as no evidence of a difference;
+     - stop once the models left are identical, so each keeps p = 1.
+   - A test confirms it reproduces arch's p-values exactly on tie-free data and survives exact ties.
+   - Phases 3 and 4 had no ties (arch would have crashed there the same way), so their results are identical under either implementation.
+7. **A bug I introduced with the duplicate step, caught before anything was committed.**
+   - The selection table mixed full Series with a `duplicate_of` Series covering only some configurations, so pandas sorted the index alphabetically. The complexity column, a plain list in the original order, no longer lined up: inside the rule, each configuration carried another's complexity.
+   - The first completed run therefore chose `comb_sqrt10|skewt_mkt` (complexity 7) at 10 days, although B3 (complexity 1) passed every step.
+   - The inconsistency was visible only because the script recomputes complexity for its own table.
+   - **Fixed:** every column is now indexed by configuration. A new test uses names out of alphabetical order with a duplicate present, and fails on the old code; a mutation was added.
+   - Phases 3 and 4 are unaffected (their results predate the duplicate step). Phase 5 was re-run.
+
+### Results (books P1–P5, validation 2015–18; 2012–14 in brackets)
+| | 1-day | 10-day |
+|---|---|---|
+| Configurations (duplicates collapsed) | 54 (9 duplicates: weekday EWMA = EWMA for books) | 108 (19 duplicates) |
+| In the 10% confidence set | 37 | 69 |
+| Also no worse than B3 and pass the three calibration tests | 20 | 43 |
+| **Chosen** | **`ewma_1\|t_mkt`: EWMA on the book, per-book Student-t.** Complexity 2; FZ0 gain over B3 0.009 (t = 1.3) [+0.002] | **B3 itself: calibrated EWMA-normal × √10.** It passes everything, and nothing simpler exists. |
+| Best point estimate | combination + per-book t, 0.015 (t = 1.8) [−0.008] | GJR √10 + pooled GPD, 0.036 (t = 2.1) [−0.115] |
+
+What it says (`results/p5_configs_1d.csv`, `results/p5_configs_10d.csv`, `results/p5_configs.png`):
+1. **For books, the volatility model matters far less than for single markets.**
+   - EWMA on the book is statistically tied with GJR and the combination, and it is the only one of them not worse than B3 in 2012–14.
+   - Diversification smooths the book's volatility dynamics, and the book's own EWMA tracks its changing correlations.
+2. **Fat tails still matter at 1 day.**
+   - B3 (normal) fails two of the three pooled tests: 99% breaches 1.38% and ES ratio 1.22.
+   - EWMA + t passes them (1.05%, 0.97).
+   - Per book, B3 is rejected on the TTF–NBP spread by every 97.5% ES test.
+3. **At 10 days the honest answer is "keep calibrated EWMA".** B3 passes all three tests, and no candidate is detectably better (the best is 0.036 with t = 2.1, and −0.115 in 2012–14). The A1 guard made this answer possible; without it, historical simulation would have been the 10-day choice here too.
+4. **Joint filtered HS loses for spreads, not for outright books** (the per-book comparison with GJR scales against EWMA + t on the book, 2015–18; positive FZ0 difference = joint worse):
+
+   | Book | FZ0 difference | 99% VaR, univariate / joint |
+   |---|---|---|
+   | P1 long basket | **−0.046** (joint better) | 3.5% / 3.3% |
+   | P5 gas vs oil | −0.017 (joint better) | 3.4% / 3.0% |
+   | P2 short basket | +0.023 | 3.5% / 3.2% |
+   | P3 TTF–NBP spread | +0.097 | 1.0% / 1.3% |
+   | P4 Brent–WTI spread | **+0.417** | 0.9% / 1.4% |
+
+   - **The cause is dependence drift** (`results/p5_dependence.csv`). The correlation of Brent's and WTI's standardised daily moves was 0.76–0.87 in 2011–14 (the Cushing glut) and 0.93–0.98 in 2015–18.
+   - Joint FHS resamples residual vectors from the whole training history, so it carries the loose years into the tight ones and overstates spread risk by about half. A model on the book's own returns adapts to the current relationship. TTF–NBP drifts less (0.83–0.96).
+   - Pooled over P1–P5, the spreads dominate, so joint FHS is out of the confidence set at both horizons (−0.08 to −0.10 at 1 day, −0.11 to −0.17 at 10 days). Its average breach rates look fine (1.1–1.2% at 99%), because it is too wide on spreads and slightly tight on outright books.
+5. **The chosen 1-day configuration per book:** no Kupiec, Christoffersen, DQ, Acerbi–Székely or Du–Escanciano rejection at 5% in any book, and no red-zone window. McNeil–Frey rejects the TTF–NBP spread (p = 0.013, unadjusted); that book is also its weakest elsewhere (99% breaches 1.6%).
+6. **Random books (P6):** with the chosen methods, 1 of 50 books (1-day) and 3 of 50 (10-day, non-overlapping) fail exact Kupiec at 99%. Under a correct model the 95% binomial range is 0–5. Pooled breach rates: 1.00% / 2.58% at 1 day, 1.32% / 2.79% at 10 days.
+
+### Things I'm unsure about
+1. **Equal pooling over P1–P5 gives the two spreads 40% of the weight.** That is what the protocol registered, and spreads are where a risk engine earns its keep. But it means one book (P4) decides the joint-vs-univariate comparison; the per-book table shows both sides.
+2. **Joint FHS with a rolling (rather than expanding) residual pool would probably fix the spread problem.** It isn't a registered candidate; adding it now would be tuning on the validation window. It is a natural robustness check for the write-up.
+3. **The book choices differ from the single-market choices** (EWMA + t, not GJR + t). That is expected: books average away the dynamics GJR models. The protocol chose per horizon and per level (markets vs books), so the engine is really three configurations, not one.
+4. **Phase 5 took five full runs.** Each failure found a real gap: the book calendar, duplicate forecasts, two-sided books, MCS ties, misaligned complexities. All are fixed and tested, and none touched the test window. The smoke run is now routine before any long run.
+
+### Next: Phase 6 (learned model and stress early-warning)
+1. **Learned model:**
+   - (a) a linear model of VaR and ES multiples on scale-free inputs (vol state, weekday, implied/realised ratio, trend strength, curve slope), fitted by minimising FZ0;
+   - (b) a small network with the same inputs, only if (a) helps.
+2. **Early warning:** P(next-21-day vol ≥ 1.5× / 2× EWMA), judged by Brier skill against a vol-state logistic baseline, with reliability tables.
+3. **Then the freeze:** the rule applied once over all candidates (markets and books, 1 and 10 days), the configuration committed, and the holdout script committed unrun (Phase 7).
+
+---
+
 ## Session 5 (2026-11-18): Phase 4, the 10-day horizon. Done.
 
 ### Done

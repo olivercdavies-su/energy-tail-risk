@@ -4,7 +4,7 @@
 
 It builds on [energy-vol-targeting](https://github.com/olivercdavies-su/energy-vol-targeting). That project found that volatility forecasts are good enough for sizing, but that the tails beyond the 95% level are not modelled well. Its data pipeline (contract-consistent returns built from exchange expiry rules) is reused here.
 
-> **Status:** Phase 4 complete. The evaluation toolkit is built and checked by simulation, the final test is pre-registered in [`PROTOCOL.md`](PROTOCOL.md) (one amendment, A1), and the volatility models, tail shapes and the 1-day and 10-day engines are built and evaluated on development data. The 2019–26 test window stays sealed until the frozen engine is run once. See [`PROJECT_LOG.md`](PROJECT_LOG.md).
+> **Status:** Phase 5 complete. The evaluation toolkit is built and checked by simulation, the final test is pre-registered in [`PROTOCOL.md`](PROTOCOL.md) (one amendment, A1), and the volatility models, tail shapes, the 1-day and 10-day engines and the portfolio methods are built and evaluated on development data. The 2019–26 test window stays sealed until the frozen engine is run once. See [`PROJECT_LOG.md`](PROJECT_LOG.md).
 
 ## How the engine will be judged
 
@@ -47,6 +47,17 @@ After scaling by a volatility forecast, a Gaussian 99% VaR is breached on 0.7–
 - **At 10 days the data can say much less.** 84 of 130 configurations are statistically indistinguishable from the best. Whether the term structures beat √10 reverses between 2012–14 and 2015–18.
 - **As registered, the selection rule picked historical simulation**, which scores worse than calibrated EWMA. In turbulent markets it breached its 99% VaR 3.4% of the time, against 1% expected. A guard now requires the chosen engine to be no worse than calibrated EWMA (protocol Amendment A1, recorded before any test data is seen). Under it the 10-day choice is **HAR volatility × √10 with a per-market Student-t**.
 
+## Portfolios (2015–2018 validation)
+
+![Book-level FZ0 gain by method](results/p5_configs.png)
+
+- **The books:** five registered books (long and short baskets, TTF–NBP and Brent–WTI spreads, European gas vs oil) and 50 random books.
+- **Two ways to forecast them:**
+  - the engine on each book's own return history;
+  - joint filtered historical simulation, which applies each market's volatility to whole days of past joint moves.
+- **For books, simple wins.** EWMA on the book with a Student-t tail is the 1-day choice. At 10 days nothing beats calibrated EWMA × √10, so it is kept. With these, 1 and 3 of the 50 random books fail the 99% Kupiec test, inside the 0–5 expected by chance.
+- **Joint simulation does well on outright books but badly on spreads.** The Brent–WTI relationship tightened (correlation of standardised moves 0.76–0.87 in 2011–14, 0.93–0.98 in 2015–18), and resampling the whole history carries the loose years forward. Its spread VaR comes out about 50% too high.
+
 ## Data and licensing
 
 Daily Bloomberg futures data, 2010–2026. **Bloomberg's licence forbids redistributing the data, so none of it is in this repository, raw or derived.** The repo holds only code, aggregated results tables and charts.
@@ -77,6 +88,7 @@ python scripts/p1_baselines.py      # baselines on 2012-18 development data
 python scripts/p2_scale.py          # volatility models, 2012-18
 python scripts/p3_tails.py          # tail shapes, all configurations, the selection rule
 python scripts/p4_ten_day.py        # the 10-day horizon (about 40 minutes)
+python scripts/p5_portfolios.py     # portfolios P1-P6 (about an hour)
 pytest                              # real-data tests skip without the workbook
 python scripts/mutation_check.py    # injects known bugs; each must make a test fail
 ```
