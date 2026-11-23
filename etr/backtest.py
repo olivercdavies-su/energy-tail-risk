@@ -258,6 +258,8 @@ def diebold_mariano(d, lags: int = 5) -> dict:
     2h = 20 lags (results/p1_test_size.csv and PROJECT_LOG.md, session 2)."""
     d = np.asarray(d, float)
     d = d[np.isfinite(d)]
+    if np.all(d == 0):                                    # identical forecasts: no difference
+        return {"n": len(d), "mean_diff": 0.0, "se": 0.0, "t": 0.0, "p": 1.0, "p_less": 0.5}
     m, se = _hac_mean(d, lags)
     t = m / se
     return {"n": len(d), "mean_diff": m, "se": se, "t": t, "p": float(2 * stats.norm.sf(abs(t))),
@@ -366,12 +368,59 @@ def nonoverlapping(frame: pd.DataFrame, h: int, anchor: str = "2010-01-01") -> p
     return out[~out.index.duplicated()]
 
 
+class _TieSafeMCS(MCS):
+    """arch's MCS with its R method made robust, otherwise unchanged. arch eliminates the
+    model at the location of the largest standardised loss difference via
+    np.argwhere(...).squeeze()[0], which breaks when two different pairs tie exactly for the
+    maximum (it then removes two models at once and fails) or when a pair's difference has
+    zero bootstrap variance (a NaN statistic). Here the first maximum is taken, which is
+    what arch does whenever the maximum is unique (so results are identical then); a
+    zero-variance pair counts as no evidence of a difference, and once the models left are
+    identical none is eliminated (each keeps p = 1)."""
+
+    def _compute_r(self) -> None:
+        losses = self._losses_arr
+        mean_losses = losses.mean(0)[:, None]
+        loss_diffs = mean_losses - mean_losses.T
+        bootstrapped_mean_losses = np.zeros((self.reps, self.k, self.k))
+        for j, data in enumerate(self.bootstrap.bootstrap(self.reps)):
+            bs_index = data[0][0]
+            self._bootstrap_indices.append(np.asarray(bs_index, dtype=int))
+            mean_losses_star = losses[bs_index].mean(0)[:, None]
+            bootstrapped_mean_losses[j] = mean_losses_star - mean_losses_star.T
+        bootstrapped_mean_losses -= loss_diffs
+        variances = (bootstrapped_mean_losses ** 2).mean(0)
+        variances += np.eye(self.k)
+        self._variances = variances
+        with np.errstate(divide="ignore", invalid="ignore"):
+            std_loss_diffs = np.nan_to_num(loss_diffs / np.sqrt(variances), nan=0.0)
+            std_bs_mean_losses = np.nan_to_num(bootstrapped_mean_losses / np.sqrt(variances), nan=0.0)
+        included = np.ones(self.k, dtype=np.bool_)
+        eliminated = []
+        while included.sum() > 1:
+            indices = np.argwhere(included)
+            included_loss_diffs = std_loss_diffs[indices, indices.T]
+            test_stat = np.max(included_loss_diffs)
+            if test_stat <= 0:                         # the models left are identical: no ranking
+                break
+            included_bs_losses = std_bs_mean_losses[:, indices, indices.T]
+            simulated_test_stat = np.max(np.max(included_bs_losses, 2), 1)
+            pval = (test_stat < simulated_test_stat).mean()
+            i = int(np.argwhere(included_loss_diffs == test_stat)[0, 0])
+            eliminated.append((indices.flat[i], pval))
+            included[indices.flat[i]] = False
+        for ind in np.argwhere(included).flatten():
+            eliminated.append((ind, 1.0))
+        self._pvalues = self._format_pvalues(eliminated)
+
+
 def model_confidence_set(losses: pd.DataFrame, size: float = 0.10, block: int = 10,
                          reps: int = 2000, seed: int = 0) -> pd.Series:
     """Hansen, Lunde & Nason (2011) model confidence set on per-date losses (one column per
-    model), block bootstrap. Returns each model's MCS p-value; models with p >= size are in
-    the set of models that cannot be told apart from the best."""
-    m = MCS(losses.dropna(), size=size, reps=reps, block_size=block, method="R", seed=seed)
+    model), block bootstrap (arch's implementation, made tie-safe). Returns each model's MCS
+    p-value; models with p >= size are in the set of models that cannot be told apart from
+    the best."""
+    m = _TieSafeMCS(losses.dropna(), size=size, reps=reps, block_size=block, method="R", seed=seed)
     m.compute()
     return m.pvalues.iloc[:, 0].reindex(losses.columns)
 

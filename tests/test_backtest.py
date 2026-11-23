@@ -137,6 +137,8 @@ def test_diebold_mariano():
     res = bt.diebold_mariano(d)
     assert res["p_less"] < 0.05 and res["mean_diff"] < 0
     assert bt.diebold_mariano(RNG.standard_normal(1000))["p"] > 0.001
+    same = bt.diebold_mariano(np.zeros(500))                   # identical forecasts
+    assert same["t"] == 0.0 and same["p"] == 1.0
 
 
 def correlated_hits(n, alpha, rng, rho=0.9):
@@ -223,3 +225,25 @@ def test_model_confidence_set_keeps_the_best_and_drops_the_bad():
     losses = pd.DataFrame({"best": base, "same": base + 0.01 * RNG.standard_normal(n), "bad": base + 0.5})
     p = bt.model_confidence_set(losses, reps=500)
     assert p["best"] >= 0.10 and p["bad"] < 0.10
+
+
+def test_tie_safe_mcs_matches_arch_and_survives_ties():
+    """Without ties the result is arch's exactly; with two pairs tied for the largest
+    statistic arch fails and the tie-safe version does not."""
+    from arch.bootstrap import MCS
+    rng = np.random.default_rng(13)
+    L = pd.DataFrame(rng.normal(size=(400, 5)) + np.array([0, 0.05, 0.1, 0.3, 0.02]), columns=list("abcde"))
+    a = MCS(L, size=0.1, reps=300, block_size=10, method="R", seed=3)
+    a.compute()
+    np.testing.assert_allclose(bt.model_confidence_set(L, block=10, reps=300, seed=3).to_numpy(),
+                               a.pvalues.iloc[:, 0].reindex(L.columns).to_numpy())
+    x, y = rng.normal(size=400), rng.normal(size=400)
+    T = pd.DataFrame({"a": x, "b": x + 1 + y})
+    T["c"], T["d"] = T["a"], T["b"]                    # copies: tied maxima and zero-variance pairs
+    with pytest.raises(Exception):
+        m = MCS(T, size=0.1, reps=300, block_size=10, method="R", seed=3)
+        m.compute()
+        m.pvalues
+    p = bt.model_confidence_set(T, block=10, reps=300, seed=3)
+    assert p.notna().all()
+    assert p["a"] >= 0.10 and p["c"] >= 0.10 and p["b"] < 0.10 and p["d"] < 0.10
