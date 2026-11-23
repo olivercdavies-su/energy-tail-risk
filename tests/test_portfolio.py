@@ -90,16 +90,35 @@ def test_joint_fhs_keeps_same_day_dependence():
     assert v_spread < 0.25 * v_leg
 
 
-def test_joint_fhs_closed_markets_do_not_move(setup):
-    """A book entirely in HH: on a day HH is closed the simulated move is zero."""
+def test_closed_markets_do_not_move_in_a_simulation():
+    """Same seed, same draws: changing the weight of a market that is closed on every
+    simulated day changes nothing; once it opens, it does."""
+    rng_pool = np.random.default_rng(3)
+    pool = rng_pool.standard_normal((500, 3))
+    sig = np.full((4, 3), 0.02)
+    opens = np.ones((4, 5, 3), bool)
+    opens[:, :, 0] = False                                        # market 0 closed throughout
+    W1 = np.array([[0.0], [0.5], [0.5]])
+    W2 = np.array([[0.9], [0.5], [0.5]])
+    a = pf.simulate_log_nav(sig, opens, pool, W1, np.random.default_rng(1), 300)
+    b = pf.simulate_log_nav(sig, opens, pool, W2, np.random.default_rng(1), 300)
+    np.testing.assert_array_equal(a, b)
+    opens[:, 2, 0] = True
+    c = pf.simulate_log_nav(sig, opens, pool, W2, np.random.default_rng(1), 300)
+    assert not np.allclose(a, c)
+
+
+def test_books_live_on_their_own_markets_calendar(setup):
+    """A book of US markets has no day on which all its markets are closed, so it never
+    gets a certain-zero loss (whose ES would be 0); its returns are its market's own."""
     R, U, open_, W, fc, ins = setup
     hh = pd.Series({"HH": 1.0}).reindex(pf.ORDER, fill_value=0.0)
-    f = pf.joint_fhs(R, fc, ins, [2015], "ewma", {"hh": hh})[("hh", "long")]
-    fr = f.frame
-    closed_next = [d for d in fr.index if not open_.loc[U.index[U.index.get_loc(d) + 1], "HH"]]
-    assert closed_next
-    for d in closed_next:
-        assert fr.loc[d, "var99"] == pytest.approx(0.0, abs=1e-12)
+    cal = pf.book_calendar(open_, hh)
+    assert cal.equals(R["HH"].index[R["HH"]["ret"].notna()])
+    b = pf.book_return(U, hh, open_)
+    np.testing.assert_allclose(b["ret"], R["HH"]["ret"].reindex(cal))
+    f = pf.joint_fhs(R, fc, ins, [2015], "ewma", {"hh": hh})[("hh", "long")].frame
+    assert (f["es975"] > 0).all() and (f["var99"] > 0).all()
 
 
 def test_joint_fhs_has_no_lookahead(setup):
@@ -131,3 +150,14 @@ def test_residual_pool_ignores_the_forecast_years_returns(setup):
     _, _, ins2 = scale.walk_forward(shocked, [2016], keep_insample=True)
     np.testing.assert_array_equal(p0, pf.residual_vectors(shocked, ins2, 2016, "gjr_1"))
     assert p0.shape[1] == 6 and np.isfinite(p0).all()
+
+
+def test_books_are_forecast_long_only(setup):
+    """A book is one position; its 'short side' would be a different book (P1 short is P2),
+    so the engine can be asked for the long side only."""
+    from etr import engine
+    R, _, _, _, fc, ins = setup
+    sub = {k: R[k] for k in ("TTF", "NBP")}
+    one, _ = engine.one_day(sub, fc, ins, YEARS, "ewma_1", "t_pool", sides=("long",))
+    ten, _ = engine.ten_day(sub, fc, ins, YEARS, "ewma", "t_pool", "term", sides=("long",))
+    assert set(one) == set(ten) == {("TTF", "long"), ("NBP", "long")}

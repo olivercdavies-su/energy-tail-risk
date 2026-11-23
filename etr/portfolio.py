@@ -5,8 +5,9 @@ A book has fixed weights w (gross notional sum |w| = 1), rebalanced daily to tho
 of its value (a constant-mix book), with each leg's P&L a percentage of its own notional
 (FX-neutral). Its daily return is
     p_t = sum_i w_i (exp(r_it) - 1),
-on the union of the markets' trading days: a market that is closed contributes nothing that
-day, and its next return covers the gap. An h-day loss compounds the daily returns:
+on the union of the trading days of the book's own markets (a spread of two markets does not
+"trade" on a day both are closed): a market that is closed contributes nothing that day, and
+its next return covers the gap. An h-day loss compounds the daily returns:
 L = 1 - prod(1 + p). Writing the book's log return as log(1 + p_t), a book is then just
 another "market" for the single-market engine (etr.engine), with one side: the book itself.
 
@@ -39,11 +40,17 @@ def union_returns(rets: dict[str, pd.DataFrame]) -> tuple[pd.DataFrame, pd.DataF
     return R.fillna(0.0), R.notna()
 
 
-def book_return(U: pd.DataFrame, w: pd.Series) -> pd.DataFrame:
+def book_calendar(open_: pd.DataFrame, w: pd.Series) -> pd.DatetimeIndex:
+    """The book's own trading days: days on which at least one of its markets trades."""
+    return open_.index[open_[w.index[w != 0]].any(axis=1).to_numpy()]
+
+
+def book_return(U: pd.DataFrame, w: pd.Series, open_: pd.DataFrame | None = None) -> pd.DataFrame:
     """A book's daily log return log(1 + sum_i w_i (exp(r_i) - 1)), in the single-market
-    frame layout (ret, span)."""
-    p = (np.expm1(U[w.index]) * w).sum(axis=1)
-    return pd.DataFrame({"ret": np.log1p(p), "span": 1}, index=U.index)
+    frame layout (ret, span), on the book's own calendar when the open mask is given."""
+    idx = U.index if open_ is None else book_calendar(open_, w)
+    p = (np.expm1(U.loc[idx, w.index]) * w).sum(axis=1)
+    return pd.DataFrame({"ret": np.log1p(p), "span": 1}, index=idx)
 
 
 def market_vols(U: pd.DataFrame, open_: pd.DataFrame, window=VOL_WINDOW) -> pd.Series:
@@ -99,39 +106,59 @@ def residual_vectors(rets: dict[str, pd.DataFrame], insample: dict, year: int, s
     return Z[ORDER].to_numpy()
 
 
+def simulate_log_nav(sig: np.ndarray, opens: np.ndarray, pool: np.ndarray, Wm: np.ndarray,
+                     rng: np.random.Generator, n_paths: int) -> np.ndarray:
+    """Simulated log growth of each book over h days (origins x paths x books).
+    sig: daily vol per origin and market (origins x markets); opens: whether each market
+    trades on each simulated day (origins x h x markets); pool: residual vectors (rows = real
+    days); Wm: weights (markets x books). Each simulated day draws one residual vector for
+    all markets at once, so same-day dependence is kept; a closed market does not move."""
+    n_o, h, _ = opens.shape
+    log_nav = np.zeros((n_o, n_paths, Wm.shape[1]))
+    for k in range(h):
+        z = pool[rng.integers(0, len(pool), (n_o, n_paths))]                          # origins x paths x markets
+        r = sig[:, None, :] * z * opens[:, k][:, None, :]
+        log_nav += np.log1p(np.expm1(r) @ Wm)
+    return log_nav
+
+
 def joint_fhs(rets: dict[str, pd.DataFrame], fc: dict[str, pd.DataFrame], insample: dict, years: list[int],
               scale_name: str, weights: dict[str, pd.Series], h: int = 1, scale_col: str | None = None,
-              n_paths: int = 2000, seed: int = 20261024) -> dict:
+              n_paths: int = 2000, seed: int = 20261024, keep_draws: bool = True) -> dict:
     """h-day forecasts of every book by joint filtered historical simulation.
 
     Each market's daily volatility is its own scale forecast at its last trading day on or
     before the origin (for h = 10, the h-day variance forecast spread evenly over the days).
     Each simulated day draws one training residual vector (a real day's joint move) and
     applies it to the markets open that day (exchange holidays are known in advance); the
-    book compounds daily. Returns {(book, "long"): Forecast}."""
+    book compounds daily over its own trading days. Books with the same markets share a
+    calendar and the same simulated paths. Returns {(book, "long"): Forecast}."""
     U, open_ = union_returns(rets)
     scale_col = scale_col or f"{scale_name}_1"
     out = {(b, "long"): [] for b in weights}
-    Wm = np.column_stack([weights[b].reindex(ORDER).to_numpy() for b in weights])      # markets x books
-    realised = {b: tails.forward_returns(book_return(U, w), h) for b, w in weights.items()}
+    groups = {}
+    for b, w in weights.items():
+        groups.setdefault(tuple(w.index[w != 0]), []).append(b)
+    var_all = pd.DataFrame({n: fc[n][scale_col] for n in ORDER}).reindex(U.index).ffill(limit=5)
+    realised = {b: tails.forward_returns(book_return(U, w, open_), h) for b, w in weights.items()}
     for y in years:
         pool = residual_vectors(rets, insample, y, f"{scale_name}_1")
-        days = U.index[U.index.year == y]
-        pos = U.index.get_indexer(days)
-        ok = pos + h < len(U.index)
-        days, pos = days[ok], pos[ok]
-        var = pd.DataFrame({n: fc[n][scale_col] for n in ORDER}).reindex(U.index).ffill(limit=5)
-        sig = np.sqrt(var.loc[days, ORDER].to_numpy() / h)                                  # origins x markets
-        valid = np.isfinite(sig).all(axis=1)
-        days, pos, sig = days[valid], pos[valid], sig[valid]
-        rng = np.random.default_rng([seed, y, h])
-        log_nav = np.zeros((len(days), n_paths, Wm.shape[1]))
-        for k in range(1, h + 1):
-            z = pool[rng.integers(0, len(pool), (len(days), n_paths))]                   # origins x paths x markets
-            r = sig[:, None, :] * z * open_.to_numpy()[pos + k][:, None, :]
-            log_nav += np.log1p(np.expm1(r) @ Wm)
-        for j, b in enumerate(weights):
-            R = realised[b].loc[days]
-            keep = R.notna().to_numpy()
-            out[(b, "long")].append(engine.simulated_forecast(R[keep], log_nav[keep, :, j], "long"))
+        for g, (markets, names) in enumerate(groups.items()):
+            cal = book_calendar(open_, weights[names[0]])
+            opn = open_.loc[cal, ORDER].to_numpy()
+            days = cal[cal.year == y]
+            pos = cal.get_indexer(days)
+            ok = pos + h < len(cal)
+            days, pos = days[ok], pos[ok]
+            sig = np.sqrt(var_all.loc[days, ORDER].to_numpy() / h)                          # origins x markets
+            valid = np.isfinite(sig[:, [ORDER.index(m) for m in markets]]).all(axis=1)
+            days, pos, sig = days[valid], pos[valid], np.nan_to_num(sig[valid])
+            opens = np.stack([opn[pos + k] for k in range(1, h + 1)], axis=1)              # origins x h x markets
+            Wm = np.column_stack([weights[b].reindex(ORDER).to_numpy() for b in names])
+            rng = np.random.default_rng([seed, y, h, g])
+            log_nav = simulate_log_nav(sig, opens, pool, Wm, rng, n_paths)
+            for j, b in enumerate(names):
+                R = realised[b].loc[days]
+                keep = R.notna().to_numpy()
+                out[(b, "long")].append(engine.simulated_forecast(R[keep], log_nav[keep, :, j], "long", keep_draws))
     return {k: tails.concat(v) for k, v in out.items()}

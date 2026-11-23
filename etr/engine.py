@@ -67,12 +67,12 @@ def residuals_10(df: pd.DataFrame, var_ins: pd.Series, cut: pd.Timestamp) -> np.
 
 
 def ten_day(rets: dict[str, pd.DataFrame], fc: dict[str, pd.DataFrame], insample: dict, years: list[int],
-            scale_name: str, shape_name: str, approach: str) -> tuple[dict, list]:
+            scale_name: str, shape_name: str, approach: str, sides=tails.SIDES) -> tuple[dict, list]:
     """10-day forecasts of one configuration. approach "sqrt10": the 1-day engine (daily
     residuals, variance 10 x the 1-day forecast); "term": the model's own 10-day forecast and
     a shape fitted to 10-day residuals. scale_name is the model, e.g. "gjr"."""
     kind, pooled = SHAPES[shape_name]
-    parts = {(n, s): [] for n in rets for s in tails.SIDES}
+    parts = {(n, s): [] for n in rets for s in sides}
     params = []
     col = f"{scale_name}_sqrt10" if approach == "sqrt10" else f"{scale_name}_10"
     for y in years:
@@ -86,7 +86,7 @@ def ten_day(rets: dict[str, pd.DataFrame], fc: dict[str, pd.DataFrame], insample
             params.append({"year": y, "market": n, **describe(shapes[n])})
             var = fc[n][col]
             var_y = var.where(var.index.year == y).reindex(df.index)
-            for side in tails.SIDES:
+            for side in sides:
                 parts[(n, side)].append(tails.scale_shape_forecast(df, var_y, side, 10, shapes[n]))
     return {k: tails.concat(v) for k, v in parts.items()}, params
 
@@ -109,13 +109,13 @@ def gjr_path_returns(sigma2_1: np.ndarray, params: pd.Series, pool: np.ndarray, 
 
 
 def gjr_paths(rets: dict[str, pd.DataFrame], diag: pd.DataFrame, years: list[int], pooled: bool,
-              n_paths: int = 2000, seed: int = 20261024) -> tuple[dict, list]:
+              n_paths: int = 2000, seed: int = 20261024, keep_draws: bool = True, sides=tails.SIDES) -> tuple[dict, list]:
     """10-day forecasts by filtered historical simulation along GJR paths. Uses the same
     yearly GJR fits as etr.scale.walk_forward (from its diagnostics frame), the in-sample
     standardised residuals of those fits as the shock pool (per market, or pooled), and the
     GJR 10-day calibration scale, so its average level matches the calibrated gjr_10."""
     from etr import scale
-    parts = {(n, s): [] for n in rets for s in tails.SIDES}
+    parts = {(n, s): [] for n in rets for s in sides}
     info = []
     for y in years:
         cut = pd.Timestamp(f"{y - 1}-12-31")
@@ -139,15 +139,17 @@ def gjr_paths(rets: dict[str, pd.DataFrame], diag: pd.DataFrame, years: list[int
             pool = pooled_z if pooled else pools[n]
             R = gjr_path_returns(s1.loc[origins].to_numpy(), params, pool, rng, n_paths) * np.sqrt(c10)
             info.append({"year": y, "market": n, "c10": c10, "pool_size": len(pool), "pool_mean_square": float(np.mean(pool ** 2))})
-            for side in tails.SIDES:
-                parts[(n, side)].append(simulated_forecast(fwd.loc[origins], R, side))
+            for side in sides:
+                parts[(n, side)].append(simulated_forecast(fwd.loc[origins], R, side, keep_draws))
     return {k: tails.concat(v) for k, v in parts.items()}, info
 
 
-def simulated_forecast(realised: pd.Series, sims: np.ndarray, side: str) -> tails.Forecast:
+def simulated_forecast(realised: pd.Series, sims: np.ndarray, side: str, keep_draws: bool = True) -> tails.Forecast:
     """A Forecast from simulated h-day log returns (origins x paths): VaR and ES by the
     historical-simulation convention on the simulated losses, the PIT as the share of
-    simulated losses at least as large as the realised one, draws resampled from the paths."""
+    simulated losses at least as large as the realised one, draws resampled from the paths.
+    keep_draws=False drops the paths after summarising them (selection needs only VaR, ES
+    and the PIT; the paths take about 16 kB per origin)."""
     L = tails.to_loss(sims, side).astype(np.float32)
     srt = -np.sort(-L, axis=1)
     loss = tails.to_loss(realised.to_numpy(), side)
@@ -156,6 +158,11 @@ def simulated_forecast(realised: pd.Series, sims: np.ndarray, side: str) -> tail
         out[tails.col("var", a)], out[tails.col("es", a)] = tails.empirical_var_es(srt.astype(float), a)
     out["u"] = (L >= loss[:, None]).mean(1)
     frame = pd.DataFrame(out, index=realised.index)
+
+    if not keep_draws:
+        def unavailable(rng, n, rows):
+            raise RuntimeError("built with keep_draws=False")
+        return tails.Forecast(frame, unavailable)
 
     def sampler(rng, n, rows):
         sub = L if rows is None else L[rows]
@@ -166,12 +173,12 @@ def simulated_forecast(realised: pd.Series, sims: np.ndarray, side: str) -> tail
 
 
 def one_day(rets: dict[str, pd.DataFrame], fc: dict[str, pd.DataFrame], insample: dict, years: list[int],
-            scale_col: str, shape_name: str) -> tuple[dict, list]:
+            scale_col: str, shape_name: str, sides=tails.SIDES) -> tuple[dict, list]:
     """1-day forecasts of one configuration for every market and side, and the fitted shape
     parameters by year. `fc`, `insample` come from etr.scale.walk_forward(keep_insample=True);
     scale_col is e.g. "comb_iv_1"."""
     kind, pooled = SHAPES[shape_name]
-    parts = {(n, s): [] for n in rets for s in tails.SIDES}
+    parts = {(n, s): [] for n in rets for s in sides}
     params = []
     for y in years:
         cut = pd.Timestamp(f"{y - 1}-12-31")
@@ -181,7 +188,7 @@ def one_day(rets: dict[str, pd.DataFrame], fc: dict[str, pd.DataFrame], insample
             params.append({"year": y, "market": n, **describe(shapes[n])})
             var = fc[n][scale_col]
             var_y = var.where(var.index.year == y).reindex(df.index)
-            for side in tails.SIDES:
+            for side in sides:
                 parts[(n, side)].append(tails.scale_shape_forecast(df, var_y, side, 1, shapes[n]))
     return {k: tails.concat(v) for k, v in parts.items()}, params
 
@@ -242,10 +249,24 @@ def select(scores: pd.DataFrame, failures: pd.Series, block: int, b3: str | None
     Returns one row per configuration with its MCS p-value, the flags of each step,
     complexity, and the chosen one marked."""
     P = scores.dropna()
-    mcs = bt.model_confidence_set(P, size=size, block=block, reps=2000, seed=seed)
+    # Identical forecasts are one model under several names (e.g. for a book, weekday EWMA
+    # whose factors all shrink to 1 is plain EWMA): keep the simplest name. The model
+    # confidence set cannot compare two identical columns (their difference has no variance).
+    cols = list(P.columns)
+    kept, twin = [], {}
+    for c in sorted(cols, key=lambda c: (complexity(c), cols.index(c))):
+        same = next((k for k in kept if np.array_equal(P[c].to_numpy(), P[k].to_numpy())), None)
+        if same is None:
+            kept.append(c)
+        else:
+            twin[c] = same
+    mcs = bt.model_confidence_set(P[kept], size=size, block=block, reps=2000, seed=seed).reindex(P.columns)
+    # Every column is indexed by configuration explicitly (a partial Series such as
+    # duplicate_of would otherwise make pandas sort the index and misalign a plain list).
     t = pd.DataFrame({"mean_fz0": P.mean(), "mcs_p": mcs, "failures": failures.reindex(P.columns),
-                      "complexity": [complexity(c) for c in P.columns]})
-    t["shortlisted"] = t["mcs_p"] >= size
+                      "complexity": pd.Series({c: complexity(c) for c in P.columns}),
+                      "duplicate_of": pd.Series(twin, dtype=object).reindex(P.columns)}).reindex(P.columns)
+    t["shortlisted"] = (t["mcs_p"] >= size) & t["duplicate_of"].isna()
     t["no_worse_than_b3"] = t["mean_fz0"] <= t.loc[b3, "mean_fz0"] + 1e-12 if b3 is not None else True
     t["passes_screen"] = t["shortlisted"] & t["no_worse_than_b3"] & (t["failures"] == 0)
     pool = t[t["passes_screen"]]

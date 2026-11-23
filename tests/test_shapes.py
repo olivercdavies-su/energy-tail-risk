@@ -202,3 +202,37 @@ def test_selection_guard_excludes_shortlisted_models_worse_than_b3():
     worse = scores.drop(columns="gjr_1|t_pool")
     only_b3 = engine.select(worse, fails.drop("gjr_1|t_pool"), block=10, b3="ewma_1|normal")
     assert only_b3.loc["ewma_1|normal", "chosen"]
+
+
+def test_selection_collapses_identical_forecasts_to_the_simplest_name():
+    """Two names for the same forecasts: the simpler one carries on, the other is flagged."""
+    rng = np.random.default_rng(9)
+    base = rng.normal(size=600)
+    scores = pd.DataFrame({"ewma_1|normal": base + 0.3 * rng.normal(size=600),
+                           "ewma_1|t_pool": base - 0.02 + 0.3 * rng.normal(size=600)})
+    scores["ewma_wd_1|t_pool"] = scores["ewma_1|t_pool"]
+    fails = pd.Series(0, index=scores.columns)
+    t = engine.select(scores, fails, block=10, b3="ewma_1|normal")
+    assert t.loc["ewma_wd_1|t_pool", "duplicate_of"] == "ewma_1|t_pool"
+    assert not t.loc["ewma_wd_1|t_pool", "shortlisted"] and not t.loc["ewma_wd_1|t_pool", "chosen"]
+    assert pd.isna(t.loc["ewma_1|t_pool", "duplicate_of"])
+
+
+def test_selection_keeps_each_configuration_with_its_own_complexity():
+    """Names out of alphabetical order and a duplicate present: the simplest passing
+    configuration (B3 here, complexity 1) must be chosen, which needs each row to keep its
+    own complexity (a partial duplicate_of column once misaligned them)."""
+    rng = np.random.default_rng(10)
+    base = rng.normal(size=600)
+
+    def noise():
+        z = rng.normal(size=600)
+        return 0.3 * (z - z.mean())
+    scores = pd.DataFrame({"hs500": base + 0.02 + noise(), "ewma_sqrt10|normal": base + noise(),
+                           "comb_sqrt10|skewt_mkt": base - 0.001 + noise()})
+    scores["ewma_wd_sqrt10|normal"] = scores["ewma_sqrt10|normal"]          # a duplicate
+    fails = pd.Series(0, index=scores.columns)
+    t = engine.select(scores, fails, block=10, b3="ewma_sqrt10|normal")
+    for c in scores.columns:
+        assert t.loc[c, "complexity"] == engine.complexity(c)
+    assert t.loc["ewma_sqrt10|normal", "chosen"]
