@@ -124,3 +124,130 @@ def test_learned_forecast_scales_the_base_by_its_multiplier(walk):
     c = a.index.intersection(b.index)
     np.testing.assert_allclose(a.loc[c, "var99"] / b.loc[c, "var99"], a.loc[c, "multiplier"], rtol=0.03)
     assert a.loc[c, "multiplier"].std() > 0
+
+
+# ---- The small network (design: PROJECT_LOG session 7) ----
+
+@pytest.fixture
+def small_net(monkeypatch):
+    """One member and at most 300 steps, so the walk-forward tests run in seconds."""
+    monkeypatch.setattr(learned, "NN_MEMBERS", 1)
+    monkeypatch.setattr(learned, "NN_MAX_STEPS", 300)
+
+
+def simulated(n, rng, f, d=3, shape=tails.StudentT(5)):
+    X = rng.standard_normal((n, d))
+    sigma = np.full(n, 0.02)
+    return X, sigma, sigma * np.exp(f(X)) * shape.rvs(size=n, random_state=rng)
+
+
+def out_of_sample(beta, members, f, side="long", n=20_000, seed=9):
+    """FZ0 of the linear model and the network on fresh data, and their log multipliers."""
+    Xt, st, Rt = simulated(n, np.random.default_rng(seed), f)
+    g = groups_for(tails.StudentT(5), n, side)
+    lin = np.clip(np.c_[np.ones(n), Xt] @ beta, -3, 3)
+    net = learned.network_eta(members, Xt)
+    score = lambda eta: learned.fz0_and_grad(st * np.exp(eta), Rt, g, side)[0]          # noqa: E731
+    return score(lin), score(net), lin, net, f(Xt)
+
+
+@pytest.mark.parametrize("side", tails.SIDES)
+def test_network_gradient_matches_finite_differences(side):
+    """Backpropagation through FZ0, the tanh layer and the linear part agrees with central
+    differences for every parameter (including the weight decay)."""
+    rng = np.random.default_rng(4)
+    n, d = 400, 3
+    X, sigma, R = simulated(n, rng, lambda X: 0 * X[:, 0])
+    g = groups_for(tails.StudentT(5), n, side)
+    p = learned.init_network(rng.normal(0, 0.1, d + 1), d, 1)
+    p["v"], p["c"] = rng.normal(0, 0.2, learned.NN_HIDDEN), rng.normal(0, 0.3, learned.NN_HIDDEN)
+    _, grad = learned.network_loss_grad(p, X, sigma, R, g, side)
+    eps = 1e-6
+    for k in p:
+        for i in np.ndindex(p[k].shape):
+            up = {kk: vv.copy() for kk, vv in p.items()}
+            dn = {kk: vv.copy() for kk, vv in p.items()}
+            up[k][i] += eps
+            dn[k][i] -= eps
+            num = (learned.network_loss_grad(up, X, sigma, R, g, side)[0]
+                   - learned.network_loss_grad(dn, X, sigma, R, g, side)[0]) / (2 * eps)
+            assert grad[k][i] == pytest.approx(num, rel=1e-4, abs=1e-8), (k, i)
+
+
+def test_untrained_network_is_the_linear_model(monkeypatch):
+    """With no training steps the fitted ensemble is exactly the linear model it was given
+    (fitted on all rows), whatever its random hidden weights."""
+    monkeypatch.setattr(learned, "NN_MAX_STEPS", 0)
+    rng = np.random.default_rng(5)
+    n = 2000
+    X, sigma, R = simulated(n, rng, lambda X: 0.3 * X[:, 0])
+    g = groups_for(tails.StudentT(5), n, "long")
+    beta = learned.fit_multiplier(X, sigma, R, g, "long")
+    dates = pd.bdate_range("2010-01-01", periods=n).to_numpy()
+    members, diag = learned.fit_network(X, sigma, R, g, "long", dates, dates, beta, seed=1)
+    assert diag["k_star"] == " ".join(["0"] * learned.NN_MEMBERS)
+    np.testing.assert_allclose(learned.network_eta(members, X), np.clip(np.c_[np.ones(n), X] @ beta, -3, 3))
+
+
+def test_network_learns_a_nonlinear_effect(small_net):
+    """True vol = base vol x exp(0.4 (|x| - 0.8)): bigger moves either way widen the tails.
+    No linear multiplier can see it; the network does, out of sample."""
+    f = lambda X: 0.4 * (np.abs(X[:, 0]) - 0.8)                                       # noqa: E731
+    n = 4000
+    X, sigma, R = simulated(n, np.random.default_rng(6), f)
+    g = groups_for(tails.StudentT(5), n, "long")
+    beta = learned.fit_multiplier(X, sigma, R, g, "long")
+    dates = pd.bdate_range("2010-01-01", periods=n).to_numpy()
+    members, _ = learned.fit_network(X, sigma, R, g, "long", dates, dates, beta, seed=1)
+    lin, net, _, eta, truth = out_of_sample(beta, members, f)
+    assert net < lin - 0.01
+    assert np.corrcoef(eta, truth)[0, 1] > 0.8
+
+
+def test_network_stays_near_linear_on_noise(monkeypatch):
+    """With nothing to learn, early stopping keeps the network close to the linear model
+    (training the full 1,000 steps on noise moves it about six times further)."""
+    monkeypatch.setattr(learned, "NN_MEMBERS", 1)
+    f = lambda X: 0 * X[:, 0]                                                          # noqa: E731
+    n = 4000
+    X, sigma, R = simulated(n, np.random.default_rng(5), f)
+    g = groups_for(tails.StudentT(5), n, "short")
+    beta = learned.fit_multiplier(X, sigma, R, g, "short")
+    dates = pd.bdate_range("2010-01-01", periods=n).to_numpy()
+    members, _ = learned.fit_network(X, sigma, R, g, "short", dates, dates, beta, seed=1)
+    _, _, lin, net, _ = out_of_sample(beta, members, f, side="short")
+    assert np.std(net - lin) < 0.1
+
+
+def test_inner_validation_is_the_latest_dates_and_purged():
+    """Early stopping validates on the latest quarter of training dates; inner training rows
+    are earlier and their (10-day) targets end before validation starts."""
+    days = pd.bdate_range("2012-01-02", periods=800)
+    dates = np.r_[days.to_numpy(), days[100:].to_numpy()]                          # two markets
+    ends = np.r_[days.shift(10).to_numpy(), days[100:].shift(10).to_numpy()]
+    tr, va = learned.inner_split(dates, ends)
+    start = dates[va].min()
+    assert dates[tr].max() < start and ends[tr].max() < start
+    assert set(np.flatnonzero(dates >= start)) == set(va)
+    assert len(np.unique(dates[va])) == pytest.approx(0.25 * 800, abs=2)
+    assert len(tr) + len(va) < len(dates)                                          # the purge removed rows
+
+
+def test_network_forecasts_have_no_lookahead(walk, small_net):
+    """Network forecasts before a shock are unchanged by it, and the fits (made at the start
+    of each year) are identical."""
+    mk, fc, ins, feats = walk
+    base, p0 = learned.learned_forecasts(mk, fc, ins, feats, YEARS, "gjr", "t_pool", h=1, model="network")
+    cut = pd.Timestamp("2016-06-15")
+    shocked = {k: v.copy() for k, v in mk.items()}
+    for v in shocked.values():
+        v.loc[v.index > cut, "ret"] *= 3
+    fc2, _, ins2 = scale.walk_forward(shocked, YEARS, keep_insample=True)
+    feats2 = {n: learned.features(df) for n, df in shocked.items()}
+    alt, p1 = learned.learned_forecasts(shocked, fc2, ins2, feats2, YEARS, "gjr", "t_pool", h=1, model="network")
+    cols = [c for c in base[("A", "long")].frame.columns if c.startswith(("var", "es"))]
+    for k in base:
+        b = base[k].frame.loc[:cut - pd.offsets.BDay(1), cols]
+        pd.testing.assert_frame_equal(b, alt[k].frame.loc[b.index, cols])
+    assert p0 == p1
+    assert all("k_star" in row for row in p0)

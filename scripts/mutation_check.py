@@ -91,6 +91,19 @@ MUTATIONS = [
      "stress window includes the origin day"),
     ("etr/learned.py", "                f = tails.scale_shape_forecast(df, var_y * m ** 2, side, h, shapes[n])",
      "                f = tails.scale_shape_forecast(df, var_y * m, side, h, shapes[n])", "multiplier applied to variance, not vol"),
+    ("etr/learned.py", "    f_E = -hit * (L - V) / (alpha * E ** 2) - V / E ** 2 + 1 / E",
+     "    f_E = -hit * (L - V) / E ** 2 - V / E ** 2 + 1 / E", "network gradient missing 1/alpha"),
+    ("etr/learned.py", "    A = np.outer(d_eta, p[\"v\"]) * (1 - H ** 2)", "    A = np.outer(d_eta, p[\"v\"]) * (1 - H)",
+     "wrong tanh derivative in backpropagation"),
+    ("etr/learned.py", "            \"c\": np.zeros(NN_HIDDEN), \"v\": np.zeros(NN_HIDDEN)}",
+     "            \"c\": np.zeros(NN_HIDDEN), \"v\": rng.normal(0, 0.1, NN_HIDDEN)}", "network does not start at the linear model"),
+    ("etr/learned.py", "    return np.flatnonzero((dates < start) & (ends < start)), np.flatnonzero(dates >= start)",
+     "    return np.flatnonzero(dates < start), np.flatnonzero(dates >= start)", "early-stopping split not purged"),
+    ("etr/learned.py", "        p, _, _ = _adam(init_network(beta, X.shape[1]", "        p, _, _ = _adam(init_network(beta_in, X.shape[1]",
+     "network refit starts from the inner linear fit"),
+    ("etr/learned.py", "                        lambda q: network_loss_grad(q, X, sigma, R, groups, side, alpha), kstar)",
+     "                        lambda q: network_loss_grad(q, X, sigma, R, groups, side, alpha), NN_MAX_STEPS)",
+     "network ignores early stopping"),
 ]
 failed_to_catch = []
 for path, old, new, label in MUTATIONS:

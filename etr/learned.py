@@ -98,6 +98,139 @@ def fit_multiplier(X: np.ndarray, sigma: np.ndarray, R: np.ndarray, groups: list
     return res.x
 
 
+# ---- Small neural network on top of the linear multiplier (design: PROJECT_LOG session 7) ----
+#
+# log m = b0 + x'beta + sum_j v_j tanh(w_j'x + c_j): the linear model plus a bounded
+# nonlinear correction. It starts exactly at the fitted linear model (v = 0), is trained on
+# mean FZ0 by full-batch Adam with analytic gradients (backpropagation), stops early on the
+# latest quarter of training origins, and is averaged over a few random starts.
+
+NN_HIDDEN = 8
+NN_DECAY = 1e-4
+NN_LR = 0.01
+NN_MAX_STEPS = 1000
+NN_PATIENCE = 100
+NN_VALID = 0.25
+NN_MEMBERS = 5
+
+
+def fz0_and_grad(s: np.ndarray, R: np.ndarray, groups: list, side: str, alpha: float = 0.025):
+    """Mean FZ0 of forecasts with volatility s (one per row) and its gradient with respect to
+    s. VaR = loss(s q) and ES = sum_k w_k loss(s z_k), as in fz0_objective; the chain rule
+    goes through d loss / d logret = -e^r (long) or e^r (short)."""
+    L = tails.to_loss(R, side)
+    g = -1.0 if side == "long" else 1.0
+    V, E, dV, dE = (np.empty_like(s) for _ in range(4))
+    for idx, q, z, w in groups:
+        si = s[idx]
+        V[idx] = tails.to_loss(si * q, side)
+        dV[idx] = g * q * np.exp(si * q)
+        ez = np.exp(si[:, None] * z[None, :])
+        E[idx] = (tails.to_loss(si[:, None] * z[None, :], side) * w).sum(1)
+        dE[idx] = (g * z[None, :] * ez * w).sum(1)
+    hit = (L > V).astype(float)
+    f = hit * (L - V) / (alpha * E) + V / E + np.log(E) - 1
+    f_V = -hit / (alpha * E) + 1 / E
+    f_E = -hit * (L - V) / (alpha * E ** 2) - V / E ** 2 + 1 / E
+    return float(f.mean()), (f_V * dV + f_E * dE) / len(s)
+
+
+def init_network(beta: np.ndarray, d: int, seed) -> dict:
+    """Parameters of a network equal to the linear model beta: output weights v = 0, hidden
+    weights w ~ N(0, 1/d), hidden biases c = 0."""
+    rng = np.random.default_rng(seed)
+    return {"b": np.array(beta, float), "W": rng.normal(0, np.sqrt(1 / d), (d, NN_HIDDEN)),
+            "c": np.zeros(NN_HIDDEN), "v": np.zeros(NN_HIDDEN)}
+
+
+def _eta(p: dict, X: np.ndarray):
+    H = np.tanh(X @ p["W"] + p["c"])
+    return p["b"][0] + X @ p["b"][1:] + H @ p["v"], H
+
+
+def network_eta(members: list, X: np.ndarray) -> np.ndarray:
+    """log multiplier of an ensemble: the mean of its members' (clipped) log m."""
+    return np.mean([np.clip(_eta(p, X)[0], -3, 3) for p in members], axis=0)
+
+
+def network_loss_grad(p: dict, X, sigma, R, groups, side, alpha=0.025, decay=NN_DECAY):
+    """Mean FZ0 plus weight decay on the network weights, and its gradient."""
+    eta, H = _eta(p, X)
+    inside = np.abs(eta) < 3
+    s = sigma * np.exp(np.clip(eta, -3, 3))
+    f, ds = fz0_and_grad(s, R, groups, side, alpha)
+    d_eta = ds * s * inside
+    A = np.outer(d_eta, p["v"]) * (1 - H ** 2)
+    grad = {"b": np.r_[d_eta.sum(), X.T @ d_eta], "W": X.T @ A + 2 * decay * p["W"], "c": A.sum(0),
+            "v": H.T @ d_eta + 2 * decay * p["v"]}
+    return f + decay * ((p["W"] ** 2).sum() + (p["v"] ** 2).sum()), grad
+
+
+def _adam(p: dict, loss_grad, steps: int, monitor=None, patience: int = NN_PATIENCE):
+    """Full-batch Adam for `steps` steps. With monitor (a function of the parameters), keep
+    track of the step with the lowest monitored value, stop after `patience` steps without
+    improvement, and return it (0 = the starting parameters) with its value."""
+    m = {k: np.zeros_like(v) for k, v in p.items()}
+    u = {k: np.zeros_like(v) for k, v in p.items()}
+    best, best_t = (monitor(p) if monitor else np.inf), 0
+    for t in range(1, steps + 1):
+        _, g = loss_grad(p)
+        for k in p:
+            m[k] = 0.9 * m[k] + 0.1 * g[k]
+            u[k] = 0.999 * u[k] + 0.001 * g[k] ** 2
+            p[k] = p[k] - NN_LR * (m[k] / (1 - 0.9 ** t)) / (np.sqrt(u[k] / (1 - 0.999 ** t)) + 1e-8)
+        if monitor:
+            val = monitor(p)
+            if val < best:
+                best, best_t = val, t
+            elif t - best_t >= patience:
+                break
+    return p, best_t, best
+
+
+def inner_split(dates: np.ndarray, ends: np.ndarray, frac: float = NN_VALID):
+    """Rows for early stopping: the latest `frac` of training dates validate; earlier origins
+    whose targets ended before the first validation date train (the same purge as the
+    walk-forward)."""
+    u = np.unique(dates)
+    start = u[int(np.floor(len(u) * (1 - frac)))]
+    return np.flatnonzero((dates < start) & (ends < start)), np.flatnonzero(dates >= start)
+
+
+def _subset(groups: list, rows: np.ndarray) -> list:
+    pos = np.full(max(int(i.max()) for i, *_ in groups) + 1, -1)
+    pos[rows] = np.arange(len(rows))
+    return [(pos[idx][pos[idx] >= 0], q, z, w) for idx, q, z, w in groups]
+
+
+def fit_network(X: np.ndarray, sigma: np.ndarray, R: np.ndarray, groups: list, side: str, dates: np.ndarray,
+                ends: np.ndarray, beta: np.ndarray, seed, alpha: float = 0.025):
+    """Ensemble of NN_MEMBERS networks on top of the linear model `beta` (fitted on all of
+    X). Each member: refit the linear model on the inner training rows, train from it with
+    early stopping on the inner validation rows to find the step count k*, then start again
+    from `beta` with the same random hidden weights and train k* steps on all rows.
+    Returns (members, diagnostics)."""
+    tr, va = inner_split(dates, ends)
+    g_tr, g_va = _subset(groups, tr), _subset(groups, va)
+    beta_in = fit_multiplier(X[tr], sigma[tr], R[tr], g_tr, side, alpha)
+    val = lambda q: fz0_and_grad(sigma[va] * np.exp(np.clip(_eta(q, X[va])[0], -3, 3)), R[va], g_va, side, alpha)[0]  # noqa: E731
+    members, ks, gains = [], [], []
+    for k in range(NN_MEMBERS):
+        p0 = init_network(beta_in, X.shape[1], [*np.atleast_1d(seed), k])
+        start = val(p0)
+        _, kstar, best = _adam(p0, lambda q: network_loss_grad(q, X[tr], sigma[tr], R[tr], g_tr, side, alpha),
+                               NN_MAX_STEPS, monitor=val)
+        p, _, _ = _adam(init_network(beta, X.shape[1], [*np.atleast_1d(seed), k]),
+                        lambda q: network_loss_grad(q, X, sigma, R, groups, side, alpha), kstar)
+        members.append(p)
+        ks.append(kstar)
+        gains.append(start - best)
+    lin = fz0_and_grad(sigma * np.exp(np.clip(np.c_[np.ones(len(X)), X] @ beta, -3, 3)), R, groups, side, alpha)[0]
+    net = fz0_and_grad(sigma * np.exp(network_eta(members, X)), R, groups, side, alpha)[0]
+    diag = {"k_star": " ".join(map(str, ks)), "inner_valid_gain": float(np.mean(gains)), "train_gain": lin - net}
+    return members, diag
+
+
 # ---- Early warning ----
 
 def stress_events(df: pd.DataFrame, k: float, h: int = EW_HORIZON) -> pd.Series:
@@ -146,11 +279,16 @@ def reliability(p: pd.Series, y: pd.Series, bins: int = 10) -> pd.DataFrame:
 def learned_forecasts(rets: dict[str, pd.DataFrame], fc: dict[str, pd.DataFrame], insample: dict,
                       feats: dict[str, pd.DataFrame], years: list[int], scale_name: str, shape_name: str,
                       h: int = 1, approach: str = "sqrt10", extra=None, alpha: float = 0.025,
-                      sides=tails.SIDES) -> tuple[dict, list]:
+                      sides=tails.SIDES, model: str = "linear", seed=20261024,
+                      keep: dict | None = None) -> tuple[dict, list]:
     """Forecasts of the learned multiplier on top of one configuration (the scale model
     `scale_name` with shape `shape_name`; at 10 days by square-root-of-time or term
     structure, as etr.engine builds them). extra(market, year) may return a Series of one
-    more input (the early-warning probability from that year's fit)."""
+    more input (the early-warning probability from that year's fit). model="network" adds
+    the small network on top of each year's linear fit; `keep`, if given, receives each
+    year's fitted models by (year, side)."""
+    if model not in ("linear", "network"):
+        raise ValueError(model)
     from etr import engine
     kind, pooled = engine.SHAPES[shape_name]
     term = h > 1 and approach == "term"
@@ -191,12 +329,21 @@ def learned_forecasts(rets: dict[str, pd.DataFrame], fc: dict[str, pd.DataFrame]
                 q, z, w = _tail_nodes(shapes[n], alpha, upper)
                 groups.append((idx, q, z, w))
             beta = fit_multiplier(X, sigma, R, groups, side, alpha)
-            params.append({"year": y, "side": side, "n_train": len(train), **dict(zip(["const"] + cols, beta))})
+            row = {"year": y, "side": side, "n_train": len(train), **dict(zip(["const"] + cols, beta))}
+            members = None
+            if model == "network":
+                members, diag = fit_network(X, sigma, R, groups, side, train.index.to_numpy(), train["end"].to_numpy(),
+                                            beta, seed=[*np.atleast_1d(seed), y, tails.SIDES.index(side)], alpha=alpha)
+                row.update(diag)
+            params.append(row)
+            if keep is not None:
+                keep[(y, side)] = {"beta": beta, "members": members, "cols": cols, "std": std}
             for n, df in rets.items():
                 var = fc[n][col]
                 var_y = var.where(var.index.year == y).reindex(df.index)
                 Z = std(Xs[n].reindex(df.index)[cols]).to_numpy()
-                m = pd.Series(np.exp(np.clip(np.c_[np.ones(len(Z)), Z] @ beta, -3, 3)), index=df.index)
+                eta = network_eta(members, Z) if members else np.clip(np.c_[np.ones(len(Z)), Z] @ beta, -3, 3)
+                m = pd.Series(np.exp(eta), index=df.index)
                 f = tails.scale_shape_forecast(df, var_y * m ** 2, side, h, shapes[n])
                 f.frame["multiplier"] = m.reindex(f.frame.index)              # recorded for diagnostics
                 parts[(n, side)].append(f)
