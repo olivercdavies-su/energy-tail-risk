@@ -4,7 +4,7 @@
 
 It builds on [energy-vol-targeting](https://github.com/olivercdavies-su/energy-vol-targeting). That project found that volatility forecasts are good enough for sizing, but that the tails beyond the 95% level are not modelled well. Its data pipeline (contract-consistent returns built from exchange expiry rules) is reused here.
 
-> **Status:** Phase 5 complete. The evaluation toolkit is built and checked by simulation, the final test is pre-registered in [`PROTOCOL.md`](PROTOCOL.md) (one amendment, A1), and the volatility models, tail shapes, the 1-day and 10-day engines and the portfolio methods are built and evaluated on development data. The 2019–26 test window stays sealed until the frozen engine is run once. See [`PROJECT_LOG.md`](PROJECT_LOG.md).
+> **Status:** Phase 6 complete. The evaluation toolkit is built and checked by simulation, the final test is pre-registered in [`PROTOCOL.md`](PROTOCOL.md) (one amendment, A1), and the volatility models, tail shapes, the 1-day and 10-day engines, the portfolio methods, the learned models and the stress early warning are built and evaluated on development data. The 2019–26 test window stays sealed until the frozen engine is run once. See [`PROJECT_LOG.md`](PROJECT_LOG.md).
 
 ## How the engine will be judged
 
@@ -58,6 +58,20 @@ After scaling by a volatility forecast, a Gaussian 99% VaR is breached on 0.7–
 - **For books, simple wins.** EWMA on the book with a Student-t tail is the 1-day choice. At 10 days nothing beats calibrated EWMA × √10, so it is kept. With these, 1 and 3 of the 50 random books fail the 99% Kupiec test, inside the 0–5 expected by chance.
 - **Joint simulation does well on outright books but badly on spreads.** The Brent–WTI relationship tightened (correlation of standardised moves 0.76–0.87 in 2011–14, 0.93–0.98 in 2015–18), and resampling the whole history carries the loose years forward. Its spread VaR comes out about 50% too high.
 
+## Learned models and the stress early warning (2015–2018 validation)
+
+![Reliability of the stress early warning](results/p6_reliability.png)
+
+- **Early warning:** the probability that volatility over the next 21 days reaches 1.5× its calibrated forecast. It is a pooled logistic model on eight inputs known at the forecast date: vol state, recent moves, implied/realised vol, curve slope and Monday.
+  - Its Brier score is 3.8% better than a model using the vol state alone (90% interval 1.2–6.2%), so it passes the pre-registered bar.
+  - The gain comes from ranking: on the 10% of days it rates riskiest, the event happens 22% of the time.
+  - At 2× the events are too rare (2% of days) to judge.
+- **Learned VaR/ES model:** the chosen engine's volatility times a multiplier, exp(linear function of the same inputs), fitted by minimising FZ0 directly.
+  - At 1 day it scores slightly better (p = 0.08) but reverses in 2012–14 and fails two short-side calibration tests. At 10 days it is worse.
+  - The clearest input is implied vol above realised, which widens both tails.
+- **A small neural network** (one layer of 8 units, started from the linear model and stopped early on the latest training data) learns nothing beyond the linear model. Early stopping halts it after a median of 4 steps, and it is slightly worse than the linear model in both windows.
+- All of these go into the final selection as registered. As things stand, the calibration screen would keep the simpler engines.
+
 ## Data and licensing
 
 Daily Bloomberg futures data, 2010–2026. **Bloomberg's licence forbids redistributing the data, so none of it is in this repository, raw or derived.** The repo holds only code, aggregated results tables and charts.
@@ -88,7 +102,9 @@ python scripts/p1_baselines.py      # baselines on 2012-18 development data
 python scripts/p2_scale.py          # volatility models, 2012-18
 python scripts/p3_tails.py          # tail shapes, all configurations, the selection rule
 python scripts/p4_ten_day.py        # the 10-day horizon (about 40 minutes)
-python scripts/p5_portfolios.py     # portfolios P1-P6 (about an hour)
+python scripts/p5_portfolios.py     # portfolios P1-P5 and the random books (about an hour)
+python scripts/p6_learned.py        # stress early warning and the learned linear model
+python scripts/p6_network.py        # the small neural network (about 5 minutes)
 pytest                              # real-data tests skip without the workbook
 python scripts/mutation_check.py    # injects known bugs; each must make a test fail
 ```

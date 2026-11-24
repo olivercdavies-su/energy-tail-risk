@@ -98,12 +98,12 @@ def build_learned(R, iv, feats, overlay_preds):
     return {h: {c: trim(f) for c, f in cfg.items()} for h, cfg in out.items()}, pd.DataFrame(params)
 
 
-def compare(configs: dict) -> pd.DataFrame:
+def compare(configs: dict, windows: dict = WINDOWS) -> pd.DataFrame:
     rows = []
     for h, cfg in configs.items():
         m, shape, approach = BASE[h]
         base_name = f"{m}_1|{shape}" if h == 1 else f"{m}_{approach}|{shape}"
-        for win, (a, b) in WINDOWS.items():
+        for win, (a, b) in windows.items():
             S = pd.DataFrame({c: engine.pooled_fz0(f, a, b) for c, f in cfg.items()}).dropna()
             for c in cfg:
                 row = {"horizon": h, "window": win, "config": c, "mean_fz0": S[c].mean()}

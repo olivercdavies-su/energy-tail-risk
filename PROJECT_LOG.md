@@ -4,7 +4,7 @@ What was decided, why, and what comes next, so any session can pick up from here
 
 ---
 
-## Session 7 (2026-11-24): Phase 6, learned model and stress early warning
+## Session 7 (2026-11-24): Phase 6, learned model and stress early warning. Done.
 
 ### Design, fixed and committed before anything is fitted
 1. **Inputs (scale-free, known at the origin, the same for every model below):**
@@ -124,6 +124,74 @@ Pooled FZ0 gain (positive = better) and one-sided Diebold–Mariano p. The 2012�
    - Diagnostics: k* for each refit, and the partial dependence of log m on each input in the last refit.
    - Named `nn_1|t_pool`, complexity 7 (item 6).
 8. **Nothing is tuned.** These settings are fixed now. If the network loses, it loses, and it still enters the final selection in Phase 7 like every other candidate.
+
+### Done (network)
+- **`etr/learned.py`:**
+  - FZ0 with its analytic gradient;
+  - the network initialised at the linear model;
+  - Adam;
+  - the purged early-stopping split;
+  - the ensemble;
+  - `learned_forecasts(model="network")`.
+  
+  The linear path is unchanged: it reproduces its earlier results exactly.
+- **141 tests (7 new).** They check that:
+  - the gradient matches finite differences on both sides, for every parameter;
+  - an untrained network is exactly the linear model it was given;
+  - it learns a U-shaped effect (bigger moves either way widen the tails) that no linear multiplier can see, out of sample;
+  - on pure noise it stays near the linear model (training the full 1,000 steps instead moves it six times further);
+  - early stopping validates on the latest quarter of training dates, purged;
+  - neither the walk-forward network forecasts nor the fits have look-ahead.
+- **Mutation check: 46 bugs.** Six are new:
+  - the network gradient missing 1/α;
+  - the wrong tanh derivative;
+  - the network not starting at the linear model;
+  - the early-stopping split not purged;
+  - the refit starting from the inner linear fit;
+  - early stopping ignored.
+- **`scripts/p6_network.py`:** a smoke run first (two years, one small network, results to scratch), then the full run (5 minutes).
+
+### A property of the design, noticed in simulation before the run
+- **Adam's first step has a fixed size.** Adam divides each step by the gradient's own running size, so its first step moves every weight by about the learning rate (0.01), whatever the gradient.
+- **From the linear optimum, that step is noise.** At the fitted linear model the gradient of the linear part is close to zero, so one step nudges every coefficient and output weight by about 0.01 in directions set by noise.
+- **Early stopping can still pick it** (k* = 1) when the nudge happens to help the inner validation set. In simulation with nothing to learn, this cost about 0.001 FZ0 out of sample.
+- **Not changed:** the design was committed, and choosing a smaller learning rate now would be tuning. It matters for reading the results below.
+
+### Results: the network (`results/p6_network.csv`, `results/p6_network_params.csv`, `results/p6_network.png`)
+1 day, 2015–18, with 2012–14 in brackets. Gains are pooled FZ0 (positive = better) with one-sided Diebold–Mariano p.
+
+| | vs `gjr_1\|t_pool` | vs the linear model | vs B3 | Fails (of 6) |
+|---|---|---|---|---|
+| learned linear | 0.012 (p 0.084) [−0.026] | | 0.036 [−0.048] | 2 |
+| **network `nn_1\|t_pool`** | 0.010 (p 0.145) [−0.028] | **−0.002 (p 0.87) [−0.002]** | 0.034 [−0.050] | 2 |
+
+1. **The network adds nothing.** It is slightly worse than the linear model in both windows. It fails the same two short-side tests: 97.5% breaches 3.09%, ES ratio 1.22.
+2. **Early stopping barely lets it move from the linear model.**
+   - Of 70 members (7 refits × 2 sides × 5), the median stopped after 4 steps and the longest after 45. 12 stopped at 0 steps and 13 at 1.
+   - The U-shaped effect in the tests needed about 800 steps to learn.
+   - Inner validation did improve (by 0.002 to 0.028) over those few steps. That came from shifting the level towards what the latest quarter of the training data wanted, and it did not carry into the forecast year.
+3. **Read the partial-dependence figure with that in mind.** In the 2018 refit, 8 of the 10 members stopped after one step.
+   - The solid curves are close to straight lines, and their differences from the dashed linear model are the one-step nudge, not learned shape.
+   - The long side's trend-move slope even changes sign, a change of about 0.01 per sd.
+4. **What it says.** At 1 day, with these inputs, about ten years and six markets, the information the inputs carry about tail risk is linear in log volatility: implied/realised vol, shock size, Monday. Even that is weak and unstable across windows. A network is not where the gain is.
+
+### Where Phase 6 leaves the candidates for Phase 7
+- **The early-warning overlay passed rule 4.3.** It enters as "learned + overlay" at 1 and 10 days.
+- **The learned linear model, learned + overlay and the network all enter the selection as registered.** But each fails one or two pooled calibration tests on 2015–18, so as things stand the screen would keep their starting configurations. At 10 days the learned models are worse than their start.
+- **The early warning itself is reported on the holdout** (Q5: Brier skill and reliability), whatever the selection does.
+
+### Things I'm unsure about
+- **The learned models fail through a level, not through the inputs.**
+  - They learn a short-side constant from 2010–17 that was wrong for 2015–18.
+  - The holdout includes 2021–22, far outside anything in training, where a level learned in calmer years could be badly off.
+  - The starting configurations re-estimate their calibration point-in-time every year, and the multiplier does not.
+- **A Brier skill of 0.04 is small.** The early warning's reliability looks good in its top decile, but 2019+ holds the most extreme gas volatility in the sample. That is the real test.
+- **Early stopping on one validation block is noisy.** With a few steps, the network is mostly the linear model plus noise. A smaller learning rate would have made "nothing found" exact. It would not have changed the conclusion.
+
+### Next: Phase 7 (the freeze)
+1. Apply the selection rule (PROTOCOL 4.2 with A1) once over all candidates on 2015–18: single markets and books, 1 and 10 days, the learned models, the overlay and the network included.
+2. Commit the frozen configuration and the holdout script, unrun.
+3. Run it once on 2019+ and report, including the early warning's Brier skill and reliability.
 
 ---
 
