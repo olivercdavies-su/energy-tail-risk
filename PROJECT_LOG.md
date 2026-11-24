@@ -28,6 +28,68 @@ What was decided, why, and what comes next, so any session can pick up from here
 5. **The neural network is built only if the linear model helps:** its pooled validation FZ0 is below its starting configuration's, with one-sided Diebold–Mariano p < 0.10, at 1 day or at 10 days.
 6. **Complexity (PROTOCOL 4.1):** learned scale 6 plus the shape (t: 1), so 7; the overlay adds 1. A network counts as "learned" (6), as the protocol ranks it.
 
+### Done (linear model and early warning)
+- **`etr/learned.py`:**
+  - the inputs;
+  - the FZ0-fitted multiplier;
+  - stress events, the pooled logistic models, Brier skill with block-bootstrap intervals, and reliability;
+  - the walk-forward assembly (annual refits, training targets purged at the cut-off).
+- **134 tests (9 new).** They check that:
+  - the multiplier recovers a known effect on both sides and ignores an irrelevant input;
+  - inputs, fits and forecasts have no look-ahead;
+  - a year's fit ignores that year's returns;
+  - stress events look exactly 21 days ahead;
+  - Brier skill sees information and not noise;
+  - the forecast applies the multiplier it was fitted with.
+- **Mutation check: 40 bugs, all caught.** Five are new:
+  - training targets run past the cut;
+  - FZ0 objective missing 1/α;
+  - inputs peek a day ahead;
+  - events include the origin day;
+  - the multiplier applied to variance rather than volatility.
+- **`scripts/p6_learned.py`:** runs the design above on development data. Data after 2018 is dropped first, and decisions use 2015–18.
+
+### Results: early warning (`results/p6_early_warning.csv`, `results/p6_reliability.png`)
+| Event (21 days ahead) | Window | Event rate | Brier: baseline → full | Skill of full over baseline [90% CI] |
+|---|---|---|---|---|
+| vol ≥ 1.5× | **2015–18** | 7.9% | 0.0728 → 0.0700 | **0.038 [0.012, 0.062]** (95%: [0.006, 0.067]) |
+| vol ≥ 1.5× | 2012–14 | 8.6% | 0.0799 → 0.0789 | 0.013 [−0.011, 0.036] |
+| vol ≥ 2× | 2015–18 | 2.1% | 0.0211 → 0.0210 | 0.004 [−0.026, 0.026] |
+| vol ≥ 2× | 2012–14 | 2.4% | 0.0243 → 0.0231 | 0.049 [0.022, 0.110] |
+
+1. **Rule 4.3 passes at 1.5×**, so the overlay is a candidate. Q5's 95% interval also excludes zero.
+2. **The skill is small.** A Brier skill of 0.04 means the full model removes 4% of the baseline's squared error. In 2012–14 it is positive but not significant.
+3. **Where it helps is ranking.** The full model spreads its forecasts from 3% to 19%, and the top decile sees the event 22% of the time. The baseline, the vol state alone, is squeezed into 7–11% and its deciles are not even in order. On its own the vol state barely beats the base rate (skill 0.004 in 2015–18, −0.05 in 2012–14). Calibrated EWMA already absorbs most of what the vol state knows, because the event is defined against it.
+4. **At 2× the events are too rare to judge:** 2% of days, about 20 independent episodes per window. The two windows disagree, and the full model's top decile forecasts 8% against 4% observed.
+
+### Results: learned linear model (`results/p6_learned.csv`, `results/p6_learned_params.csv`)
+Pooled FZ0 gain (positive = better) and one-sided Diebold–Mariano p. The 2012–14 gain is in brackets. "Fails" counts the six pooled calibration tests at 5%.
+
+| | vs starting config | vs B3 | Fails |
+|---|---|---|---|
+| 1 day: `gjr_1\|t_pool` (start) | | 0.025 (p 0.003) [−0.022] | 0 |
+| 1 day: **learned** `learn_1\|t_pool` | **0.012 (p 0.084)** [−0.026] | 0.036 [−0.048] | **2** |
+| 1 day: learned + overlay | 0.013 (p 0.070) [−0.024] | 0.037 [−0.046] | 1 |
+| 10 days: `har_sqrt10\|t_mkt` (start) | | 0.043 (p 0.007) [−0.054] | 0 |
+| 10 days: learned | −0.031 (p 0.83) [−0.080] | 0.012 [−0.134] | 0 |
+| 10 days: learned + overlay | −0.031 (p 0.82) [−0.098] | 0.012 [−0.152] | 0 |
+
+1. **At 1 day the linear model clears the bar set for building a network** (p 0.084 < 0.10). But that is all it does:
+   - the gain reverses in 2012–14;
+   - it fails two pooled tests on the short side: 97.5% breaches 3.09% (p 0.027) and the ES ratio is 1.21 (p 0.047).
+   
+   Its starting configuration passed all six. The selection rule's screen would reject it as it stands.
+2. **Why it breaks calibration: the short-side constant.** Every year the fit shrinks short-side volatility by 3–5% (constant −0.03 to −0.05). In training, GJR-t pooled was slightly too wide for short positions. In 2015–18 it was not, so the shrunk forecasts under-cover. FZ0 improves on average because the inputs do sort days, while the level is off.
+3. **What the inputs say (1 day; the signs are stable across all seven refits):**
+   - implied above realised vol widens both sides (+0.06 to +0.10 per sd), the clearest effect;
+   - a large 5-day move widens them (+0.02 to +0.06);
+   - Monday targets widen the short side (+0.06 to +0.09): the weekend gap in European gas;
+   - an up-move yesterday widens the short side (+0.02 to +0.07): squeezes cluster.
+   
+   These match what Phase 2 found about implied vol and weekdays, now in tail units.
+4. **At 10 days the learned model is worse than its start.** With overlapping 10-day targets there are about a tenth as many independent observations as at 1 day, and nine inputs overfit them. The overlay adds nothing at either horizon. Its probability is a function of the same inputs, so the multiplier can already learn it; its coefficient changes sign between years.
+5. **By the committed rule the network is built, at 1 day.** The design comes next, committed before any training.
+
 ---
 
 ## Session 6 (2026-11-23): Phase 5, portfolios. Done.
