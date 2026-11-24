@@ -4,6 +4,32 @@ What was decided, why, and what comes next, so any session can pick up from here
 
 ---
 
+## Session 7 (2026-11-24): Phase 6, learned model and stress early warning
+
+### Design, fixed and committed before anything is fitted
+1. **Inputs (scale-free, known at the origin, the same for every model below):**
+   - **vol state:** log of EWMA vol over its trailing 1-year average (calm-before-storm, mean reversion);
+   - **trend move:** the last 5 days' return in the direction of the 12-month trend, in EWMA-vol units (the previous project: trend moves precede vol rises);
+   - **last shock:** the last day's return over the previous day's EWMA vol, signed (tail asymmetry reacts to direction);
+   - **shock size:** the absolute 5-day return in EWMA-vol units;
+   - **implied/realised:** log(implied vol / EWMA vol) for HH, Brent and WTI after the plausibility filter, and 0 elsewhere, with an availability flag;
+   - **curve slope:** log(M2 / M1) at the origin (contango or backwardation);
+   - **Monday:** 1 if the target day is a Monday (the weekend effect in European gas).
+2. **Learned linear model (PROTOCOL: "a linear model of VaR and ES multiples fitted by minimising FZ0"):**
+   - It starts from each horizon's provisional choice: `gjr_1|t_pool` at 1 day, `har_sqrt10|t_mkt` at 10 days.
+   - It multiplies that configuration's volatility by m = exp(x′β), keeping its shape. VaR and ES therefore scale together, and the model still gives a full distribution (PIT, draws) for every test.
+   - β is fitted per side (long, short), pooled over the six markets, by minimising the mean FZ0 at α = 2.5% over training origins whose target ended by the cut-off.
+   - Annual expanding refits. Inputs are standardised with the training mean and sd. Nothing is tuned.
+3. **Early warning (PROTOCOL Q5, rule 4.3):**
+   - **Events:** next-21-day realised vol ≥ 1.5× (main) and 2× the calibrated EWMA vol at the origin.
+   - **Models:** a baseline logistic on the vol state alone, and a full logistic on all the inputs. Both pooled across markets, refitted annually on windows that ended by the cut-off.
+   - **Evaluation on 2015–18:** Brier score; Brier skill against the baseline with 90% (rule 4.3) and 95% (Q5) intervals from a 21-day block bootstrap over dates; reliability by decile.
+4. **The overlay enters only if rule 4.3 passes at 1.5×.** If it does, the full model's predicted probability becomes one more input to the learned linear model (a "learned + overlay" candidate).
+5. **The neural network is built only if the linear model helps:** its pooled validation FZ0 is below its starting configuration's, with one-sided Diebold–Mariano p < 0.10, at 1 day or at 10 days.
+6. **Complexity (PROTOCOL 4.1):** learned scale 6 plus the shape (t: 1), so 7; the overlay adds 1. A network counts as "learned" (6), as the protocol ranks it.
+
+---
+
 ## Session 6 (2026-11-23): Phase 5, portfolios. Done.
 
 ### Done
