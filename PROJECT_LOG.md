@@ -90,6 +90,41 @@ Pooled FZ0 gain (positive = better) and one-sided Diebold–Mariano p. The 2012�
 4. **At 10 days the learned model is worse than its start.** With overlapping 10-day targets there are about a tenth as many independent observations as at 1 day, and nine inputs overfit them. The overlay adds nothing at either horizon. Its probability is a function of the same inputs, so the multiplier can already learn it; its coefficient changes sign between years.
 5. **By the committed rule the network is built, at 1 day.** The design comes next, committed before any training.
 
+### Network design, fixed and committed before any training
+1. **Where: at 1 day only, on `gjr_1|t_pool`.** That is the horizon where the linear model met the rule.
+   - At 10 days the linear model already lost to its starting configuration.
+   - A more flexible model on about a tenth as many independent observations can only overfit more.
+   - Building it there anyway would add a comparison we already expect it to lose.
+2. **What it is:** the same volatility multiplier, with a nonlinear correction added to the linear one:
+   - log m = b₀ + x′β + Σⱼ vⱼ tanh(wⱼ′x + cⱼ), for j = 1…8;
+   - the correction is one hidden layer of 8 tanh units;
+   - it uses the same 8 inputs, standardised and clipped as before, with log m limited to ±3;
+   - it is fitted per side and pooled over markets, on the same t shapes.
+   
+   There is no overlay input: the overlay is a function of the same inputs, so a network can learn it.
+   - **Why tanh:** it is smooth and bounded, so the correction can never exceed Σ|vⱼ|, however extreme an input. A ReLU network extrapolates in straight lines into inputs it has rarely seen, which is exactly where a risk forecast matters.
+   - **Why 8 units (89 parameters):** about 10,000 training rows per side at the last refit, but only about 250 of them are 2.5% breaches, and those carry most of the information in FZ0. The network is small on purpose.
+3. **It starts as the linear model.**
+   - The linear part starts at the linear model's fitted β (same training data) and the output weights v at 0. Before training, the network *is* the learned linear model.
+   - The hidden weights start random, w ~ N(0, 1/8), with c = 0.
+   - So training asks only one question: does a nonlinear correction help?
+4. **Training.**
+   - The loss is the same mean FZ0 (α = 2.5%), plus weight decay 10⁻⁴ × (Σw² + Σv²) on the network weights, but not on the linear part.
+   - The optimiser is full-batch Adam with learning rate 0.01.
+   - Gradients are analytic: backpropagation through FZ0. A test checks them against finite differences.
+5. **When to stop (early stopping):**
+   - Split the training origins by date. The latest 25% form an inner validation set. The earlier origins whose targets ended before the split are inner training.
+   - Refit the linear model on inner training, then train the network from it for up to 1,000 steps, checking inner-validation FZ0 after each one. Stop after 100 steps without improvement.
+   - Keep the step count k* with the lowest inner-validation FZ0. k* = 0, which means the linear model, is allowed.
+   - Then refit on all training origins: start from the full-data linear β and train exactly k* steps.
+6. **Ensemble:** 5 networks per year and side, each with a different random start for the hidden weights (seeded by year, side and member). The forecast uses the mean of their log m. Averaging removes the luck of one random start.
+7. **Evaluation:** as for the linear model.
+   - Pooled FZ0 against the starting configuration, the linear model and B3, each with Diebold–Mariano.
+   - The six pooled calibration tests on 2015–18, with 2012–14 shown alongside.
+   - Diagnostics: k* for each refit, and the partial dependence of log m on each input in the last refit.
+   - Named `nn_1|t_pool`, complexity 7 (item 6).
+8. **Nothing is tuned.** These settings are fixed now. If the network loses, it loses, and it still enters the final selection in Phase 7 like every other candidate.
+
 ---
 
 ## Session 6 (2026-11-23): Phase 5, portfolios. Done.
