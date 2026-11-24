@@ -82,6 +82,15 @@ MUTATIONS = [
     ("etr/engine.py", "                      \"complexity\": pd.Series({c: complexity(c) for c in P.columns}),",
      "                      \"complexity\": list(reversed([complexity(c) for c in P.columns])),",
      "selection with misaligned complexities"),
+    ("etr/learned.py", "            d = d[(d.index <= cut) & (d[\"end\"] <= cut)].dropna()\n            d[\"market\"] = n",
+     "            d = d[(d.index <= cut)].dropna()\n            d[\"market\"] = n", "learned training targets run past the cut"),
+    ("etr/learned.py", "    return float(np.mean((L > V) * (L - V) / (alpha * E) + V / E + np.log(E) - 1))",
+     "    return float(np.mean((L > V) * (L - V) / E + V / E + np.log(E) - 1))", "learned FZ0 objective missing 1/alpha"),
+    ("etr/learned.py", "    r5 = r.rolling(5).sum()\n", "    r5 = r.rolling(5).sum().shift(-1)\n", "inputs peek a day ahead"),
+    ("etr/learned.py", "    fwd = v[::-1].rolling(h).mean()[::-1].shift(-1)", "    fwd = v[::-1].rolling(h).mean()[::-1]",
+     "stress window includes the origin day"),
+    ("etr/learned.py", "                f = tails.scale_shape_forecast(df, var_y * m ** 2, side, h, shapes[n])",
+     "                f = tails.scale_shape_forecast(df, var_y * m, side, h, shapes[n])", "multiplier applied to variance, not vol"),
 ]
 failed_to_catch = []
 for path, old, new, label in MUTATIONS:
@@ -92,7 +101,7 @@ for path, old, new, label in MUTATIONS:
     try:
         r = subprocess.run([sys.executable, "-m", "pytest", "-q", "-x", "tests/test_tails.py", "tests/test_backtest.py", "tests/test_scale.py",
                             "tests/test_shapes.py", "tests/test_ten_day.py",
-                            "tests/test_portfolio.py"],
+                            "tests/test_portfolio.py", "tests/test_learned.py"],
                            capture_output=True, text=True, cwd=ROOT)
     finally:
         f.write_text(src)
